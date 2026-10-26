@@ -1,0 +1,468 @@
+<title>逃生動線檢討台</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* 版面：批次資訊列 → 專案設定 → 四類指標 → 居室卡片 → 平面畫布＋明細 → 走廊、修正清單、批次紀錄 */
+:root {
+  --bg: #eef1f2; --panel: #ffffff; --ink: #1d2427; --muted: #5f6b70; --line: #cfd6d9;
+  --ok: #12804a; --ok-soft: #d8efe2;
+  --bad: #c2362b; --bad-soft: #f7dcd8;
+  --ask: #a86a00; --ask-soft: #f6e6c4;
+  --gap: #4f6475; --gap-soft: #dfe6ec;
+  --hint: #7a4fb0; --hint-soft: #ece3f6;
+  --room: #f7f9f9; --corr: #e2e8ea; --sel: #1b5f9e;
+  --f-body: "Noto Sans TC", "Microsoft JhengHei", "PingFang TC", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #13181a; --panel: #1b2124; --ink: #e3e9eb; --muted: #94a2a7; --line: #313b3f;
+  --ok: #3fbf7f; --ok-soft: #17382a; --bad: #ef6b5f; --bad-soft: #43201d; --ask: #e0a640; --ask-soft: #3d2f14;
+  --gap: #9fb4c6; --gap-soft: #263039; --hint: #b892e6; --hint-soft: #2f2440;
+  --room: #20282b; --corr: #2a3337; --sel: #6aa9e6; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #13181a; --panel: #1b2124; --ink: #e3e9eb; --muted: #94a2a7; --line: #313b3f;
+  --ok: #3fbf7f; --ok-soft: #17382a; --bad: #ef6b5f; --bad-soft: #43201d; --ask: #e0a640; --ask-soft: #3d2f14;
+  --gap: #9fb4c6; --gap-soft: #263039; --hint: #b892e6; --hint-soft: #2f2440;
+  --room: #20282b; --corr: #2a3337; --sel: #6aa9e6; color-scheme: dark }
+
+body { background: var(--bg); color: var(--ink); font-family: var(--f-body); line-height: 1.55; }
+.wrap { max-width: 1280px; margin: 0 auto; padding-block: 20px 40px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 16px; }
+.mono { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+h1 { margin: 0; font-size: 1.5rem; text-wrap: balance; }
+h2 { margin: 0 0 10px; font-size: .8rem; letter-spacing: .08em; color: var(--muted); font-weight: 500; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 16px; min-width: 0; }
+.tag { display: inline-block; font-size: .72rem; letter-spacing: .04em; padding: 2px 8px; border-radius: 3px; background: var(--ask-soft); color: var(--ask); vertical-align: middle; }
+
+header { display: grid; gap: 8px; }
+.meta { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: .78rem; color: var(--muted); }
+.meta b { color: var(--ink); font-weight: 500; }
+
+.settings { display: grid; gap: 12px; }
+.fields { display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: end; }
+.fields label { display: grid; gap: 2px; font-size: .75rem; color: var(--muted); letter-spacing: .03em; }
+select, input[type="number"], textarea { font: inherit; font-size: .9rem; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--ink); }
+input[type="number"] { width: 5.5em; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.dirty { font-size: .8rem; color: var(--ask); }
+button { font: inherit; font-size: .88rem; padding: 8px 14px; border-radius: 4px; border: 1px solid var(--sel); background: var(--sel); color: var(--panel); cursor: pointer; font-weight: 500; }
+button.ghost { background: transparent; color: var(--sel); }
+button:disabled { background: transparent; color: var(--muted); border-color: var(--line); cursor: default; }
+:focus-visible { outline: 3px solid var(--sel); outline-offset: 2px; }
+
+.kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.kpi { text-align: left; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 10px 14px; display: grid; gap: 2px; font-weight: 400; }
+.kpi[aria-pressed="true"] { border-color: var(--sel); box-shadow: inset 0 0 0 1px var(--sel); }
+.kpi .n { font-family: var(--f-mono); font-size: 1.55rem; font-variant-numeric: tabular-nums; }
+.kpi .l { font-size: .78rem; color: var(--muted); }
+
+.badge { display: inline-flex; gap: 4px; align-items: center; font-size: .75rem; padding: 1px 8px; border-radius: 99px; font-weight: 500; white-space: nowrap; }
+.s-ok { background: var(--ok-soft); color: var(--ok); }
+.s-bad { background: var(--bad-soft); color: var(--bad); }
+.s-ask { background: var(--ask-soft); color: var(--ask); }
+.s-gap { background: var(--gap-soft); color: var(--gap); }
+.s-hint { background: var(--hint-soft); color: var(--hint); }
+
+.rooms { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.rc { text-align: left; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; display: grid; gap: 6px; font-weight: 400; align-content: start; }
+.rc.sel { border-color: var(--sel); box-shadow: inset 0 0 0 1px var(--sel); }
+.rc .top { display: flex; justify-content: space-between; gap: 6px; align-items: center; }
+.rc .nm { font-weight: 700; }
+.rc .d { font-family: var(--f-mono); font-size: .85rem; font-variant-numeric: tabular-nums; }
+.rc .x { font-size: .74rem; color: var(--muted); display: flex; flex-wrap: wrap; gap: 2px 10px; }
+
+.main { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.layers { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: .8rem; margin-bottom: 8px; }
+.layers label { display: flex; gap: 4px; align-items: center; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; margin-bottom: 8px; }
+.seg button { border: 0; border-radius: 0; background: transparent; color: var(--ink); font-weight: 400; padding: 5px 12px; font-size: .8rem; }
+.seg button[aria-pressed="true"] { background: var(--sel); color: var(--panel); }
+.plan-scroll { overflow-x: auto; }
+svg.plan { width: 100%; min-width: 580px; height: auto; display: block; }
+.plan text { font-family: var(--f-body); fill: var(--ink); }
+.plan .room { fill: var(--room); stroke: var(--ink); stroke-width: 2; cursor: pointer; }
+.plan .room.st-bad { fill: url(#p-bad); } .plan .room.st-ask { fill: url(#p-ask); }
+.plan .room.st-gap { fill: var(--gap-soft); stroke-dasharray: 8 5; } .plan .room.st-hint { fill: url(#p-hint); }
+.plan .room.sel { stroke: var(--sel); stroke-width: 4; }
+.plan .stair { fill: var(--ok-soft); stroke: var(--ok); stroke-width: 2; }
+.plan .tread { stroke: var(--ok); stroke-width: 1; opacity: .5; }
+.plan .corr { fill: var(--corr); } .plan .corr.narrow { fill: url(#p-bad); }
+.plan .door { stroke: var(--panel); stroke-width: 5; } .plan .door.nodata { stroke: var(--gap); stroke-dasharray: 3 2; }
+.plan .path { fill: none; stroke: var(--sel); stroke-width: 3; stroke-linejoin: round; stroke-dasharray: 8 5; }
+@media (prefers-reduced-motion: no-preference) { .plan .path { animation: walk 1.2s linear infinite; } }
+@keyframes walk { to { stroke-dashoffset: -26; } }
+.plan .alt { fill: none; stroke: var(--muted); stroke-width: 2; stroke-dasharray: 2 5; }
+.plan .start { fill: var(--panel); stroke: var(--sel); stroke-width: 3; }
+.plan .end { fill: var(--sel); }
+.plan .mk circle { fill: var(--ink); } .plan .mk text { fill: var(--panel); font-size: 11px; font-weight: 700; font-family: var(--f-mono); }
+.plan .mk.hint circle { fill: var(--hint); }
+.plan .lbl { font-size: 13px; font-weight: 700; pointer-events: none; }
+.plan .val { font-size: 11px; font-family: var(--f-mono); fill: var(--muted); pointer-events: none; }
+.plan .dim line { stroke: var(--muted); stroke-width: 1; } .plan .dim text { font-size: 10px; fill: var(--muted); font-family: var(--f-mono); }
+.plan .pat-bg-bad { fill: var(--bad-soft); } .plan .pat-ln-bad { stroke: var(--bad); stroke-width: 1.4; }
+.plan .pat-bg-ask { fill: var(--ask-soft); } .plan .pat-dot-ask { fill: var(--ask); }
+.plan .pat-bg-hint { fill: var(--hint-soft); } .plan .pat-ln-hint { stroke: var(--hint); stroke-width: 1; }
+.plan .titleblock text { font-size: 10px; fill: var(--muted); font-family: var(--f-mono); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 8px; font-size: .76rem; color: var(--muted); }
+.sw { display: inline-block; width: 14px; height: 12px; border: 1px solid var(--line); vertical-align: -2px; margin-right: 4px; }
+
+.detail { display: grid; gap: 12px; }
+.detail .head { display: flex; justify-content: space-between; gap: 8px; align-items: start; }
+.detail h3 { margin: 0; font-size: 1.15rem; }
+.blk { border-top: 1px solid var(--line); padding-top: 10px; display: grid; gap: 6px; font-size: .84rem; }
+.blk h4 { margin: 0; font-size: .74rem; letter-spacing: .08em; font-weight: 500; }
+.blk.fact h4 { color: var(--muted); } .blk.rule h4 { color: var(--sel); } .blk.hint h4 { color: var(--hint); } .blk.human h4 { color: var(--ask); }
+.blk p { margin: 0; }
+dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; }
+dt { color: var(--muted); } dd { margin: 0; text-align: right; font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+.bar { height: 10px; background: var(--corr); border-radius: 2px; position: relative; }
+.bar > span { position: absolute; inset: 0 auto 0 0; border-radius: 2px; }
+.bar > i { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--ink); }
+.barcap { display: flex; justify-content: space-between; font-size: .74rem; color: var(--muted); }
+ul.plain { margin: 0; padding-left: 1.1em; } ul.plain li { margin: 2px 0; }
+textarea { width: 100%; min-height: 3.2em; resize: vertical; }
+pre { margin: 0; font-family: var(--f-mono); font-size: .7rem; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 10px; overflow-x: auto; }
+details summary { cursor: pointer; font-size: .8rem; color: var(--muted); }
+
+.grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.tbl-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: .84rem; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: .74rem; color: var(--muted); font-weight: 500; letter-spacing: .03em; }
+td.n, th.n { text-align: right; font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+.toast { font-size: .8rem; color: var(--muted); min-height: 1.2em; }
+.foot { font-size: .75rem; color: var(--muted); display: grid; gap: 4px; }
+.foot p { margin: 0; }
+
+@media (max-width: 960px) {
+  .main, .grid2 { grid-template-columns: minmax(0, 1fr); }
+  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>逃生動線檢討台 <span class="tag">示意資料・規則包未核定</span></h1>
+    <div class="meta" id="meta"></div>
+  </header>
+
+  <section class="card settings" aria-label="專案設定">
+    <h2>專案設定（由使用者確認，程式不從房間名稱推測）</h2>
+    <div class="fields">
+      <label for="useGroup">使用類組<select id="useGroup"></select></label>
+      <label for="floorNo">樓層數（第幾層）<input type="number" id="floorNo" min="-5" max="120" step="1"></label>
+      <label for="fireRes">防火構造或不燃材料<select id="fireRes"><option value="true">是</option><option value="false">否</option><option value="null">未確認</option></select></label>
+      <label for="tv" id="tvWrap">有現場觀眾之電視攝影場<select id="tv"><option value="null">未確認</option><option value="false">否</option><option value="true">是</option></select></label>
+      <label for="classroom" id="clsWrap">走廊供教室使用<select id="classroom"><option value="null">未確認</option><option value="false">否</option><option value="true">是</option></select></label>
+    </div>
+    <div class="actions">
+      <button id="run">執行檢討（建立新批次）</button>
+      <button class="ghost" id="lock">鎖定此批次</button>
+      <span class="dirty" id="dirty" hidden>設定已變更，目前畫面仍是上一批次的結果</span>
+    </div>
+  </section>
+
+  <section class="kpis" id="kpis" aria-label="檢討結果分類"></section>
+
+  <section class="card">
+    <h2>3F 居室 ・ 點卡片查看詳細檢討</h2>
+    <div class="rooms" id="rooms"></div>
+  </section>
+
+  <div class="main">
+    <section class="card">
+      <h2>平面檢討畫布</h2>
+      <div class="seg" role="group" aria-label="上色依據">
+        <button id="viewLegal" aria-pressed="true">法規判定</button>
+        <button id="viewHint" aria-pressed="false">專案保守檢核</button>
+      </div>
+      <div class="layers" id="layers"></div>
+      <div class="plan-scroll"><svg class="plan" id="plan" viewBox="-24 -40 700 330" role="img" aria-label="3F 逃生動線平面"></svg></div>
+      <div class="legend" id="legend"></div>
+    </section>
+    <aside class="card detail" id="detail" aria-live="polite"></aside>
+  </div>
+
+  <div class="grid2">
+    <section class="card">
+      <h2>走廊淨寬（§92）</h2>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>走廊</th><th class="n">淨寬</th><th class="n">需求</th><th>規則</th><th>結果</th></tr></thead>
+        <tbody id="corrBody"></tbody></table></div>
+    </section>
+    <section class="card">
+      <h2>模型修正清單（改好後回 Revit 重新擷取）</h2>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>ElementId</th><th>問題</th><th>來源</th><th></th></tr></thead>
+        <tbody id="fixBody"></tbody></table></div>
+      <div class="toast" id="toast" role="status"></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>檢討批次紀錄（新批次不覆寫舊結果）</h2>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>批次</th><th>建立時間</th><th>使用類組</th><th class="n">上限</th><th>符合／不符合／需確認／資料不足</th><th>快照</th><th>狀態</th></tr></thead>
+      <tbody id="batchBody"></tbody></table></div>
+  </section>
+
+  <div class="foot">
+    <p>平面、尺寸與 ElementId 都是示意資料。步行距離：房內最遠點（外框內縮 0.5 m）直線到門、垂直接走廊中心線、沿中心線到樓梯計算終點；第一階段假設房內無固定障礙物。</p>
+    <p>法規依全國法規資料庫《建築技術規則建築設計施工編》第 92、93 條（2026-10-19 查閱），規則包為草案，須經建築師／法規顧問核定後才能作為正式判定依據。紫色「設計提示」是專案保守值，不是法定門檻。</p>
+  </div>
+</div>
+
+<script>
+/*ENGINE*/
+const SNAPSHOT = /*SNAPSHOT*/null;
+const PACK = /*PACK*/null;
+const SETTINGS0 = /*SETTINGS*/null;
+const BATCH0 = /*BATCH*/null;
+
+const GROUPS = ["A-1","A-2","B-1","B-2","B-3","B-4","C-1","C-2","D-1","D-2","D-3","D-4","D-5","E","F-1","F-2","F-3","F-4","G-1","G-2","G-3","H-1","H-2","I"];
+const ST = {
+  "符合": { c: "s-ok", g: "✓", plan: "" },
+  "不符合": { c: "s-bad", g: "✕", plan: "st-bad" },
+  "需人工確認": { c: "s-ask", g: "?", plan: "st-ask" },
+  "模型資料不足": { c: "s-gap", g: "!", plan: "st-gap" },
+};
+const LAYERS = [["rooms", "房間／牆"], ["doors", "門"], ["corr", "走廊"], ["stairs", "樓梯"], ["path", "逃生路徑"], ["alt", "替代出口路徑"], ["marks", "編號標記"], ["dims", "量測尺寸"]];
+const state = {
+  batches: [BATCH0], cur: 0, sel: "523105", filter: null, view: "legal",
+  layers: Object.fromEntries(LAYERS.map(([k]) => [k, k !== "dims"])),
+  settings: { ...SETTINGS0 }, review: {}, issues: [],
+};
+const $ = (id) => document.getElementById(id);
+const f1 = (n) => (n == null ? "—" : Number(n).toFixed(1));
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const batch = () => state.batches[state.cur];
+const badge = (s) => `<span class="badge ${ST[s].c}"><span aria-hidden="true">${ST[s].g}</span>${s}</span>`;
+const ruleById = Object.fromEntries(PACK.rules.map((r) => [r.id, r]));
+
+// ---------- 專案設定 ----------
+$("useGroup").innerHTML = `<option value="">— 請選擇 —</option>` + GROUPS.map((g) => `<option>${g}</option>`).join("");
+function readSettings() {
+  const tri = (v) => (v === "null" ? null : v === "true");
+  return { ...state.settings, use_group: $("useGroup").value || null, floor_number: Number($("floorNo").value),
+    fire_resistant: tri($("fireRes").value), tv_studio_with_audience: tri($("tv").value), corridor_serves_classroom: tri($("classroom").value) };
+}
+function writeSettings(s) {
+  $("useGroup").value = s.use_group || ""; $("floorNo").value = s.floor_number;
+  $("fireRes").value = String(s.fire_resistant); $("tv").value = String(s.tv_studio_with_audience); $("classroom").value = String(s.corridor_serves_classroom);
+  syncSettingFields();
+}
+function syncSettingFields() {
+  const g = $("useGroup").value;
+  $("tvWrap").hidden = !(g === "C-1" || g === "C-2");
+  $("clsWrap").hidden = !["D-3", "D-4", "D-5"].includes(g);
+  $("dirty").hidden = JSON.stringify(readSettings()) === JSON.stringify(batch().inputs.settings);
+}
+["useGroup", "floorNo", "fireRes", "tv", "classroom"].forEach((id) => $(id).addEventListener("change", syncSettingFields));
+$("run").addEventListener("click", () => {
+  const s = readSettings();
+  const b = EgressEngine.review(SNAPSHOT, s, PACK);
+  state.batches.push(b); state.cur = state.batches.length - 1; state.settings = s;
+  render(); syncSettingFields();
+});
+$("lock").addEventListener("click", () => { batch().locked = true; render(); });
+
+// ---------- 畫面 ----------
+function counts(b) {
+  const c = { "符合": 0, "不符合": 0, "需人工確認": 0, "模型資料不足": 0 };
+  b.rooms.forEach((r) => c[r.status]++);
+  return c;
+}
+function renderMeta() {
+  const b = batch(), i = b.inputs;
+  $("meta").innerHTML = [
+    ["模型", `${i.model}（Revit ${SNAPSHOT.project.revit_version}）`], ["樓層", i.level], ["擷取", i.extracted_at.replace("T", " ").slice(0, 16)],
+    ["規則包", i.rule_pack], ["引擎", i.engine_version], ["批次", `<span class="mono">${b.batch_id}</span>${b.locked ? "（已鎖定）" : ""}`],
+  ].map(([k, v]) => `<span>${k} <b>${v}</b></span>`).join("");
+  $("lock").disabled = b.locked;
+  $("lock").textContent = b.locked ? "此批次已鎖定" : "鎖定此批次";
+}
+function renderKpis() {
+  const b = batch(), c = counts(b), n = b.rooms.length;
+  const hints = b.rooms.filter((r) => r.hints.length).length;
+  const items = [...Object.keys(c).map((k) => [k, c[k], ST[k].c]), ["設計提示", hints, "s-hint"]];
+  $("kpis").innerHTML = items.map(([k, v, cls]) => `<button class="kpi" data-k="${k}" aria-pressed="${state.filter === k}">
+    <span class="n">${v}<span class="muted" style="font-size:.8rem"> / ${n}</span></span>
+    <span class="l"><span class="badge ${cls}">${k === "設計提示" ? "◆" : ST[k].g}</span> ${k} ・ ${Math.round(v / n * 100)}%</span></button>`).join("");
+  $("kpis").querySelectorAll(".kpi").forEach((el) => el.addEventListener("click", () => { state.filter = state.filter === el.dataset.k ? null : el.dataset.k; render(); }));
+}
+function renderRooms() {
+  const b = batch();
+  const list = b.rooms.filter((r) => !state.filter || (state.filter === "設計提示" ? r.hints.length : r.status === state.filter));
+  $("rooms").innerHTML = list.map((r) => {
+    const d = r.facts ? `${f1(r.facts.distance_m)} m / ${r.legal ? r.legal.limit_m + " m" : "上限未定"}` : "無法計算";
+    const sharp = r.hints.filter((h) => h.id === "P-TURN").length;
+    return `<button class="rc ${r.element_id === state.sel ? "sel" : ""}" data-id="${r.element_id}">
+      <span class="top"><span class="nm">${esc(r.name)}</span>${badge(r.status)}</span>
+      <span class="d">${d}</span>
+      <span class="x"><span>3F ・ ${esc(b.inputs.settings.use_group || "類組未選")}</span><span>候選出口 ${r.facts ? r.facts.candidates.length : 0}</span><span>急轉彎提示 ${sharp}</span></span>
+      ${r.reasons.length ? `<span class="x" style="color:var(--ask)">${esc(r.reasons[0])}</span>` : ""}
+    </button>`;
+  }).join("") || `<p class="muted">沒有符合篩選條件的居室。</p>`;
+  $("rooms").querySelectorAll(".rc").forEach((el) => el.addEventListener("click", () => { state.sel = el.dataset.id; render(); }));
+}
+
+const S = 10;
+// 平面最高的 y（Revit 座標），翻轉 y 軸用
+const PLAN_H = Math.max(...SNAPSHOT.rooms.flatMap((r) => r.boundary.map((p) => p[1])), ...SNAPSHOT.stairs.flatMap((s) => s.footprint.map((p) => p[1])));
+function renderLayers() {
+  $("layers").innerHTML = LAYERS.map(([k, t]) => `<label for="ly-${k}"><input type="checkbox" id="ly-${k}" ${state.layers[k] ? "checked" : ""}>${t}</label>`).join("");
+  LAYERS.forEach(([k]) => $("ly-" + k).addEventListener("change", (e) => { state.layers[k] = e.target.checked; renderPlan(); }));
+}
+function renderPlan() {
+  const b = batch(), L = state.layers, sel = b.rooms.find((r) => r.element_id === state.sel);
+  // 資料是 Revit 座標（y 向上＝北），SVG 的 y 向下，所以畫之前要翻轉
+  const X = (x) => x * S, Y = (y) => (PLAN_H - y) * S;
+  const pt = (p) => `${X(p[0])},${Y(p[1])}`;
+  const bb = (pts) => {
+    const xs = pts.map((q) => q[0]), ys = pts.map((q) => PLAN_H - q[1]);
+    return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
+  };
+  const rect = (r) => `x="${r.x0 * S}" y="${r.y0 * S}" width="${(r.x1 - r.x0) * S}" height="${(r.y1 - r.y0) * S}"`;
+  let h = `<defs>
+    <pattern id="p-bad" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect class="pat-bg-bad" width="7" height="7"/><line class="pat-ln-bad" x1="0" y1="0" x2="0" y2="7"/></pattern>
+    <pattern id="p-ask" width="8" height="8" patternUnits="userSpaceOnUse"><rect class="pat-bg-ask" width="8" height="8"/><circle class="pat-dot-ask" cx="4" cy="4" r="1.3"/></pattern>
+    <pattern id="p-hint" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(-45)"><rect class="pat-bg-hint" width="8" height="8"/><line class="pat-ln-hint" x1="0" y1="0" x2="0" y2="8"/></pattern>
+  </defs>`;
+  if (L.corr) for (const c of b.corridors) {
+    const cc = SNAPSHOT.corridors.find((x) => x.element_id === c.element_id);
+    const [[x0], [x1]] = cc.centerline, w = cc.clear_width_m, y = cc.centerline[0][1];
+    const r = { x0: Math.min(x0, x1), x1: Math.max(x0, x1), y0: PLAN_H - y - w / 2, y1: PLAN_H - y + w / 2 };
+    h += `<rect class="corr ${c.status === "不符合" ? "narrow" : ""}" ${rect(r)}/>`;
+    if (L.dims) h += `<g class="dim"><text x="${(r.x0 + r.x1) / 2 * S}" y="${r.y1 * S - 3}" text-anchor="middle">淨寬 ${f1(w)}</text></g>`;
+  }
+  if (L.stairs) for (const st of SNAPSHOT.stairs) {
+    const r = bb(st.footprint);
+    h += `<rect class="stair" ${rect(r)}/>`;
+    for (let y = r.y0 + 1; y < r.y1; y++) h += `<line class="tread" x1="${r.x0 * S + 4}" x2="${r.x1 * S - 4}" y1="${y * S}" y2="${y * S}"/>`;
+    h += `<text class="lbl" x="${(r.x0 + r.x1) / 2 * S}" y="${r.y0 * S - 8}" text-anchor="middle" style="fill:var(--ok)">${esc(st.name.slice(-2))}</text>`;
+  }
+  if (L.rooms) for (const r of b.rooms) {
+    const room = SNAPSHOT.rooms.find((x) => x.element_id === r.element_id), q = bb(room.boundary);
+    const cls = state.view === "legal" ? ST[r.status].plan : (r.hints.length ? "st-hint" : "");
+    h += `<rect class="room ${cls} ${r.element_id === state.sel ? "sel" : ""}" data-id="${r.element_id}" tabindex="0" role="button" aria-label="${esc(r.name)} ${r.status}" ${rect(q)}/>`;
+    const cx = (q.x0 + q.x1) / 2 * S, cy = (q.y0 + q.y1) / 2 * S;
+    h += `<text class="lbl" x="${cx}" y="${cy - 2}" text-anchor="middle">${esc(room.number)} ${ST[r.status].g}</text>`;
+    h += `<text class="val" x="${cx}" y="${cy + 14}" text-anchor="middle">${r.facts ? f1(r.facts.distance_m) + " m" : "資料不足"}</text>`;
+  }
+  if (L.doors) for (const d of SNAPSHOT.doors) {
+    const [x, y] = d.position;
+    h += `<line class="door ${d.clear_width_m == null ? "nodata" : ""}" x1="${X(x - .6)}" x2="${X(x + .6)}" y1="${Y(y)}" y2="${Y(y)}"/>`;
+  }
+  if (sel && sel.facts) {
+    if (L.alt) for (const c of sel.facts.candidates.filter((c) => c.stair_id !== sel.facts.stair_id)) {
+      const st = SNAPSHOT.stairs.find((x) => x.element_id === c.stair_id);
+      const p = sel.facts.path.slice(0, 3).concat([[st.entry_point[0], sel.facts.path[2][1]], st.entry_point]);
+      h += `<polyline class="alt" points="${p.map(pt).join(" ")}"/>`;
+    }
+    if (L.path) {
+      const p = sel.facts.path;
+      h += `<polyline class="path" points="${p.map(pt).join(" ")}"/>`;
+      h += `<circle class="end" cx="${X(p[0][0])}" cy="${Y(p[0][1])}" r="5"/>`;
+    }
+    if (L.dims) {
+      const [a, d] = [sel.facts.path[0], sel.facts.path[1]];
+      h += `<g class="dim"><text x="${X((a[0] + d[0]) / 2) + 6}" y="${Y((a[1] + d[1]) / 2)}">室內 ${f1(sel.facts.indoor_m)}</text></g>`;
+    }
+  }
+  if (L.marks) {
+    let n = 0;
+    for (const r of b.rooms) {
+      const room = SNAPSHOT.rooms.find((x) => x.element_id === r.element_id);
+      if (r.status !== "符合") {
+        n++; const q = bb(room.boundary), mx = (q.x0 + .9) * S, my = (q.y0 + .9) * S;
+        h += `<g class="mk"><circle cx="${mx}" cy="${my}" r="8"/><text x="${mx}" y="${my + 4}" text-anchor="middle">${n}</text></g>`;
+      }
+      if (r.element_id === state.sel) r.hints.filter((x) => x.at).forEach((hh, i) => {
+        h += `<g class="mk hint"><circle cx="${X(hh.at[0])}" cy="${Y(hh.at[1])}" r="8"/><text x="${X(hh.at[0])}" y="${Y(hh.at[1]) + 4}" text-anchor="middle">${String.fromCharCode(65 + i)}</text></g>`;
+      });
+    }
+  }
+  // 比例尺、北向、圖面資訊
+  h += `<g class="dim"><line x1="0" x2="${10 * S}" y1="${24 * S}" y2="${24 * S}" style="stroke-width:2"/><line x1="0" x2="0" y1="${23.6 * S}" y2="${24.4 * S}"/><line x1="${10 * S}" x2="${10 * S}" y1="${23.6 * S}" y2="${24.4 * S}"/><text x="${10 * S + 6}" y="${24 * S + 4}">10 m</text></g>
+    <g transform="translate(${66 * S},${-1 * S})"><path d="M0,-14 L6,6 L0,2 L-6,6 z" style="fill:var(--ink)"/><text x="0" y="20" text-anchor="middle" class="val" style="fill:var(--ink)">N</text></g>
+    <g class="titleblock"><text x="${64 * S}" y="${24 * S + 4}" text-anchor="end">3F ・ ${esc(b.inputs.model)} ・ ${esc(b.inputs.rule_pack)} ・ ${b.batch_id} ・ ${b.created_at.slice(0, 10)}</text></g>`;
+  $("plan").innerHTML = h;
+  $("plan").querySelectorAll(".room").forEach((el) => {
+    const go = () => { state.sel = el.dataset.id; render(); };
+    el.addEventListener("click", go);
+    el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
+  });
+  $("legend").innerHTML = state.view === "legal"
+    ? `<span><i class="sw" style="background:var(--room)"></i>✓ 符合</span><span><i class="sw" style="background:var(--bad-soft);border-color:var(--bad)"></i>✕ 不符合（斜線）</span><span><i class="sw" style="background:var(--ask-soft);border-color:var(--ask)"></i>? 需人工確認（點）</span><span><i class="sw" style="background:var(--gap-soft);border-style:dashed"></i>! 模型資料不足（虛框）</span><span><i class="sw" style="background:var(--sel)"></i>最遠點與步行路徑</span><span>灰點線＝替代出口</span>`
+    : `<span><i class="sw" style="background:var(--hint-soft);border-color:var(--hint)"></i>◆ 有設計提示（專案保守值，非法定）</span><span>A、B… 為急轉彎提示位置</span>`;
+}
+
+function issuePayload(r) {
+  return { title: `${r.name} 步行距離 ${f1(r.facts.distance_m)} m 超過 ${r.legal.limit_m} m`,
+    description: `批次 ${batch().batch_id}：最遠點至 ${r.facts.stair_name} ${f1(r.facts.distance_m)} m，依 ${r.legal.rules.map((id) => ruleById[id].article).join("、")} 上限 ${r.legal.limit_m} m。`,
+    status: "open", source: "revit", revit_element_id: r.element_id, model_name: batch().inputs.model, view_name: "3F 平面" };
+}
+function renderDetail() {
+  const b = batch(), r = b.rooms.find((x) => x.element_id === state.sel);
+  if (!r) { $("detail").innerHTML = `<p class="muted">在平面或卡片上點選一間居室。</p>`; return; }
+  const rv = state.review[b.batch_id + r.element_id] || r.manual_review;
+  const F = r.facts, G = r.legal;
+  let h = `<div class="head"><div><h3>${esc(r.name)}</h3><div class="muted mono" style="font-size:.75rem">ElementId ${r.element_id}<br>UniqueId ${r.unique_id}</div></div>${badge(r.status)}</div>`;
+  if (r.reasons.length) h += `<div class="blk human"><h4>待確認／資料缺漏</h4><ul class="plain">${r.reasons.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>`;
+  if (F) {
+    const max = Math.max(G ? G.limit_m : 0, F.distance_m);
+    h += `<div class="blk fact"><h4>模型量測（事實）</h4>
+      ${G ? `<div class="bar"><span style="width:${F.distance_m / max * 100}%;background:var(${G.pass ? "--ok" : "--bad"})"></span><i style="left:calc(${G.limit_m / max * 100}% - 1px)"></i></div><div class="barcap mono"><span>${f1(F.distance_m)} m</span><span>上限 ${G.limit_m} m</span></div>` : ""}
+      <dl><dt>室內段（最遠點→門）</dt><dd>${f1(F.indoor_m)} m</dd><dt>走廊段（門→${esc(F.stair_name)}）</dt><dd>${f1(F.corridor_m)} m</dd>
+      <dt>步行距離</dt><dd><b>${f1(F.distance_m)} m</b></dd><dt>計算終點</dt><dd>${F.endpoint_type === "fire_door" ? "安全梯防火門" : "樓梯第一階"}</dd>
+      ${F.candidates.map((c) => `<dt>候選：${esc(c.stair_name)}</dt><dd>${f1(c.distance_m)} m</dd>`).join("")}
+      <dt>轉向角</dt><dd>${F.turns.map((t) => Math.round(t.deflection_deg) + "°").join("、")}</dd></dl></div>`;
+  }
+  if (G) h += `<div class="blk rule"><h4>法規判定</h4>
+      ${G.rules.map((id) => `<p><b>${ruleById[id].article}</b>：${esc(ruleById[id].message)}</p>`).join("")}
+      <p class="muted">${esc(PACK.law.name)}・查閱 ${PACK.law.retrieved}・${esc(b.inputs.rule_pack)}</p>
+      <p>結果：${G.pass ? "未超過" : "超過"}上限 ${f1(Math.abs(G.diff_m))} m${r.reasons.length ? "（有待確認項目，暫不作結論）" : ""}</p></div>`;
+  h += `<div class="blk hint"><h4>設計提示（專案保守值，非法定）</h4>${r.hints.length ? `<ul class="plain">${r.hints.map((x) => `<li>${x.at ? String.fromCharCode(65 + r.hints.filter((y) => y.at).indexOf(x)) + "：" : ""}${esc(x.message)}</li>`).join("")}</ul>` : `<p class="muted">沒有觸發專案保守檢核。</p>`}</div>`;
+  h += `<div class="blk human"><h4>人工覆核</h4>
+      <label for="rvStatus" class="muted" style="font-size:.75rem">覆核結論</label>
+      <select id="rvStatus" ${b.locked ? "disabled" : ""}>${["未覆核", "同意程式結果", "退回：模型需修正", "退回：法規適用需確認"].map((s) => `<option ${rv.status === s ? "selected" : ""}>${s}</option>`).join("")}</select>
+      <label for="rvNote" class="muted" style="font-size:.75rem">說明</label>
+      <textarea id="rvNote" ${b.locked ? "disabled" : ""} placeholder="例如：已與法規顧問確認 B-3 適用">${esc(rv.note || "")}</textarea></div>`;
+  const issued = state.issues.some((i) => i.revit_element_id === r.element_id);
+  if (r.status === "不符合") h += `<button id="mkIssue" ${issued ? "disabled" : ""}>${issued ? "已建立 RFI 議題" : "建立 RFI 議題（綁定此居室）"}</button>
+      <details><summary>送到 RFI 後端的資料（POST /api/issues）</summary><pre>${esc(JSON.stringify(issuePayload(r), null, 2))}</pre></details>`;
+  $("detail").innerHTML = h;
+  const save = () => { state.review[b.batch_id + r.element_id] = { status: $("rvStatus").value, note: $("rvNote").value }; };
+  $("rvStatus").addEventListener("change", save); $("rvNote").addEventListener("input", save);
+  const btn = $("mkIssue"); if (btn && !btn.disabled) btn.addEventListener("click", () => { state.issues.push(issuePayload(r)); renderDetail(); });
+}
+function renderTables() {
+  const b = batch();
+  $("corrBody").innerHTML = b.corridors.map((c) => `<tr><td>${esc(c.name)}<div class="muted mono" style="font-size:.72rem">${c.element_id}</div></td>
+    <td class="n">${f1(c.clear_width_m)}</td><td class="n">${f1(c.required_m)}</td><td>${c.rule ? ruleById[c.rule].article : "—"}</td><td>${badge(c.status)}${c.reasons.map((x) => `<div class="muted" style="font-size:.72rem">${esc(x)}</div>`).join("")}</td></tr>`).join("");
+  $("fixBody").innerHTML = b.fix_list.map((f) => `<tr><td class="mono">${f.element_id}</td><td>${esc(f.issue)}</td><td>${f.source}</td>
+    <td><button class="ghost sel-btn" data-id="${f.element_id}" style="padding:3px 8px;font-size:.78rem">在 Revit 選取</button></td></tr>`).join("");
+  document.querySelectorAll(".sel-btn").forEach((el) => el.addEventListener("click", () => {
+    $("toast").textContent = `原型未連接 Revit：正式版會請外掛選取 ElementId ${el.dataset.id} 並切到該視圖。`;
+  }));
+  $("batchBody").innerHTML = state.batches.map((x, i) => {
+    const c = counts(x), lim = x.rooms.find((r) => r.legal);
+    return `<tr style="cursor:pointer;${i === state.cur ? "box-shadow:inset 3px 0 0 var(--sel)" : ""}" data-i="${i}"><td class="mono">${x.batch_id}</td><td class="mono">${x.created_at.replace("T", " ").slice(0, 19)}</td>
+      <td>${esc(x.inputs.settings.use_group || "未選")}${x.inputs.settings.fire_resistant === false ? "・非防火" : ""}・${x.inputs.settings.floor_number}F</td><td class="n">${lim ? lim.legal.limit_m : "—"}</td>
+      <td class="mono">${c["符合"]}／${c["不符合"]}／${c["需人工確認"]}／${c["模型資料不足"]}</td><td class="mono">${x.inputs.snapshot_hash}</td><td>${x.locked ? "已鎖定" : "草稿"}</td></tr>`;
+  }).join("");
+  document.querySelectorAll("#batchBody tr").forEach((tr) => tr.addEventListener("click", () => { state.cur = Number(tr.dataset.i); writeSettings(batch().inputs.settings); render(); }));
+}
+function render() {
+  renderMeta(); renderKpis(); renderRooms(); renderPlan(); renderDetail(); renderTables();
+  $("viewLegal").setAttribute("aria-pressed", state.view === "legal"); $("viewHint").setAttribute("aria-pressed", state.view === "hint");
+}
+$("viewLegal").addEventListener("click", () => { state.view = "legal"; render(); });
+$("viewHint").addEventListener("click", () => { state.view = "hint"; render(); });
+
+writeSettings(SETTINGS0);
+renderLayers();
+render();
+</script>
