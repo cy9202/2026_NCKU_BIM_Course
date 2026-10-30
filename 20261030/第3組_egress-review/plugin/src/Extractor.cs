@@ -75,7 +75,8 @@ namespace Group3.EgressExporter
             foreach (var r in All<Room>().Where(r => r.Location == null && MainModel(r) &&
                 r.get_Parameter(BuiltInParameter.ROOM_PHASE)?.AsElementId() == phase.Id))
                 Warn(r, "ROOM_NOT_PLACED", "房間未放置，無法歸屬所選樓層。", "error");
-            if (!result.corridors.Any()) Warn(null, "NO_CORRIDOR_CENTERLINE", "未設定走廊中心線；可在設定檔指定曲線，或先確認房間的 is_circulation。");
+            // 有通行空間時，B 的引擎可以直接在房間裡排路線，不一定需要中心線
+            if (!result.corridors.Any() && !result.rooms.Any(r => r.is_circulation == true)) Warn(null, "NO_CORRIDOR_CENTERLINE", "未設定走廊中心線；可在設定檔指定曲線，或先確認房間的 is_circulation。");
             Warn(null, "OBSTACLE_SCOPE", "柱子以保守包圍框擷取；設備、家具、矮牆等未完整納入。快照需覆核，不能直接作為法規核定結果。");
             result.warnings = result.warnings.OrderBy(w => w.element_id, StringComparer.Ordinal)
                 .ThenBy(w => w.code, StringComparer.Ordinal).ThenBy(w => w.message, StringComparer.Ordinal).ToList();
@@ -116,6 +117,18 @@ namespace Group3.EgressExporter
                 name = r.get_Parameter(BuiltInParameter.ROOM_NAME)?.AsString() ?? r.Name, level = level.Name,
                 area_m2 = r.Area > 0 ? (double?)UnitUtils.ConvertFromInternalUnits(r.Area, UnitTypeId.SquareMeters) : null,
                 is_habitable = mapping?.is_habitable, is_circulation = mapping?.is_circulation };
+            // 設定檔沒寫的，改讀使用者在 Revit 房間「部門」參數填的分類；不從房間名稱推測
+            var department = r.get_Parameter(BuiltInParameter.ROOM_DEPARTMENT)?.AsString()?.Trim();
+            if (!string.IsNullOrEmpty(department))
+            {
+                bool? habitable = null, circulation = null;
+                if (department == "居室") { habitable = true; circulation = false; }
+                else if (department == "通行") { habitable = false; circulation = true; }
+                else if (department == "非居室") { habitable = false; circulation = false; }
+                else Warn(r, "ROOM_DEPARTMENT_UNKNOWN", "「部門」參數是「" + department + "」；只認得 居室／通行／非居室，未採用。");
+                if (!data.is_habitable.HasValue) data.is_habitable = habitable;
+                if (!data.is_circulation.HasValue) data.is_circulation = circulation;
+            }
             result.rooms.Add(data); // Retain incomplete rooms in the repair list.
             using (var options = new SpatialElementBoundaryOptions { SpatialElementBoundaryLocation = SpatialElementBoundaryLocation.Finish })
             {
@@ -133,8 +146,8 @@ namespace Group3.EgressExporter
             else if (data.boundary_loops.Count > 1)
                 Warn(r, "ROOM_MULTIPLE_LOOPS", "包含孔洞或多個區域。原始輪廓保存在 boundary_loops；目前引擎不支援，boundary 留空以阻止錯誤路徑。", "error");
             else Warn(r, "ROOM_NOT_ENCLOSED", "房間未封閉、面積為零或沒有有效邊界。", "error");
-            if (!data.is_habitable.HasValue) Warn(r, "ROOM_USE_UNCONFIRMED", "是否居室尚未確認。");
-            if (!data.is_circulation.HasValue) Warn(r, "ROOM_CIRCULATION_UNCONFIRMED", "是否通行空間尚未確認；不會以房間名稱推測。");
+            if (!data.is_habitable.HasValue) Warn(r, "ROOM_USE_UNCONFIRMED", "是否居室尚未確認；可在房間「部門」參數填 居室／通行／非居室。");
+            if (!data.is_circulation.HasValue) Warn(r, "ROOM_CIRCULATION_UNCONFIRMED", "是否通行空間尚未確認；不會以房間名稱推測，可在「部門」參數填 通行。");
         }
         double? ClearWidth(Element e, out string source)
         {
@@ -210,11 +223,34 @@ namespace Group3.EgressExporter
                 data.entry_point = XY(point); data.endpoint_type = mapping.endpoint_type;
                 data.endpoint_source = "user_confirmed:" + reference.UniqueId;
             }
+            if (data.entry_point == null) AutoEndpoint(stair, data);
             if (data.entry_point == null) {
                 data.is_direct_stair = data.is_direct_stair == false ? (bool?)false : null;
-                Warn(stair, "STAIR_ENDPOINT_UNCONFIRMED", "尚未指定並確認本樓層第一階／防火門終點。保留 null，不會拿樓梯中心點代替。", "error");
+                Warn(stair, "STAIR_ENDPOINT_UNCONFIRMED", "尚未指定並確認本樓層第一階／防火門終點，梯段路徑也推不出來。保留 null，不會拿樓梯中心點代替。", "error");
             }
-            if (!data.is_direct_stair.HasValue) Warn(stair, "STAIR_DIRECT_UNCONFIRMED", "直通樓梯資格尚未確認，不列入計算候選。");
+            if (!data.is_direct_stair.HasValue) Warn(stair, "STAIR_DIRECT_UNCONFIRMED", "直通樓梯資格尚未確認；仍列入計算候選，但結果會標需人工確認。");
+        }
+        // 設定檔沒指定終點時，從 Revit 梯段路徑推本樓層的第一階：
+        // 樓梯從本層往上 → 最低梯段路徑的起點；樓梯到本層為止 → 最高梯段路徑的終點。穿過本層的樓梯推不出來，保留 null。
+        void AutoEndpoint(Stairs stair, StairData data)
+        {
+            const double tol = 0.05; // 判斷樓梯底／頂是否在本層的容差（公尺），幾何設定，非法規值
+            var runs = stair.GetStairsRuns().Select(id => doc.GetElement(id)).OfType<StairsRun>().ToList();
+            if (!runs.Any()) return;
+            XYZ point = null; string source = null;
+            if (Math.Abs(M(stair.BaseElevation - level.ProjectElevation)) <= tol)
+            {
+                var path = runs.OrderBy(x => x.BaseElevation).First().GetStairsPath().ToList();
+                if (path.Any()) { point = path.First().GetEndPoint(0); source = "auto:lowest_run_path_start"; }
+            }
+            else if (Math.Abs(M(stair.TopElevation - level.ProjectElevation)) <= tol)
+            {
+                var path = runs.OrderByDescending(x => x.TopElevation).First().GetStairsPath().ToList();
+                if (path.Any()) { point = path.Last().GetEndPoint(1); source = "auto:highest_run_path_end"; }
+            }
+            if (point == null) return;
+            data.entry_point = XY(point); data.endpoint_type = "first_step"; data.endpoint_source = source;
+            Warn(stair, "STAIR_ENDPOINT_AUTO", "第一階位置由梯段路徑自動推得（" + source + "），需確認；結果會標需人工確認。");
         }
         void ReadCorridor(CorridorSetting setting)
         {

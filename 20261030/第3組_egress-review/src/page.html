@@ -88,6 +88,8 @@ svg.plan { width: 100%; min-width: 580px; height: auto; display: block; }
 .plan .room.sel { stroke: var(--sel); stroke-width: 4; }
 .plan .stair { fill: var(--ok-soft); stroke: var(--ok); stroke-width: 2; }
 .plan .tread { stroke: var(--ok); stroke-width: 1; opacity: .5; }
+.plan .stair.unresolved { fill: none; stroke-dasharray: 6 4; opacity: .7; }
+.plan .entry { fill: var(--ok); }
 .plan .corr { fill: var(--corr); } .plan .corr.narrow { fill: url(#p-bad); }
 .plan .door { stroke: var(--panel); stroke-width: 5; } .plan .door.nodata { stroke: var(--gap); stroke-dasharray: 3 2; }
 .plan .path { fill: none; stroke: var(--sel); stroke-width: 3; stroke-linejoin: round; stroke-dasharray: 8 5; }
@@ -332,9 +334,15 @@ function renderKpis() {
     <span class="l"><span class="badge ${cls}">${k === "設計提示" ? "◆" : ST[k].g}</span> ${k} ・ ${Math.round(v / n * 100)}%</span></button>`).join("");
   $("kpis").querySelectorAll(".kpi").forEach((el) => el.addEventListener("click", () => { state.filter = state.filter === el.dataset.k ? null : el.dataset.k; render(); }));
 }
+// 有封閉外框、畫得進平面的房間；未放置或未封閉的只列在模型修正清單，不出卡片
+function placed(r) {
+  const room = snap().rooms.find((x) => x.element_id === r.element_id);
+  return !!room && room.boundary_closed === true && Array.isArray(room.boundary) && room.boundary.length >= 3;
+}
 function renderRooms() {
   const b = batch();
-  const list = b.rooms.filter((r) => !state.filter || (state.filter === "設計提示" ? r.hints.length : r.status === state.filter));
+  const hidden = b.rooms.filter((r) => !placed(r)).length;
+  const list = b.rooms.filter(placed).filter((r) => !state.filter || (state.filter === "設計提示" ? r.hints.length : r.status === state.filter));
   $("rooms").innerHTML = list.map((r) => {
     const d = r.facts ? `${f1(r.facts.distance_m)} m / ${r.legal ? r.legal.limit_m + " m" : "上限未定"}` : "無法計算";
     const sharp = r.hints.filter((h) => h.id === "P-TURN").length;
@@ -345,6 +353,7 @@ function renderRooms() {
       ${r.reasons.length ? `<span class="x" style="color:var(--ask)">${esc(r.reasons[0])}</span>` : ""}
     </button>`;
   }).join("") || `<p class="muted">沒有符合篩選條件的居室。</p>`;
+  if (hidden) $("rooms").innerHTML += `<p class="muted" style="grid-column:1/-1">另有 ${hidden} 間房沒有封閉外框（未放置或未封閉），沒有列出卡片；問題列在下方「模型修正清單」。</p>`;
   $("rooms").querySelectorAll(".rc").forEach((el) => el.addEventListener("click", () => { state.sel = el.dataset.id; render(); }));
 }
 
@@ -353,14 +362,14 @@ function planFrame(sp) {
   const ok = (p) => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1]);
   const pts = [
     ...sp.rooms.flatMap((r) => r.boundary || []),
-    ...sp.stairs.flatMap((s) => [...(s.footprint || []), ...(s.footprint_loops || []).flat()]),
+    ...[...sp.stairs, ...(sp.unresolved_stairs || [])].flatMap((s) => [...(s.footprint || []), ...(s.footprint_loops || []).flat()]),
     ...sp.corridors.flatMap((c) => c.centerline || []),
     ...sp.doors.map((d) => d.position),
   ].filter(ok);
   if (!pts.length) return null;
   const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
   const x0 = Math.min(...xs) - 1, x1 = Math.max(...xs) + 1, y0 = Math.min(...ys) - 1, y1 = Math.max(...ys) + 1;
-  const w = x1 - x0, h = y1 - y0, S = Math.min(640 / w, 250 / h);
+  const w = x1 - x0, h = y1 - y0, S = Math.min(640 / w, 420 / h);
   return { x0, y1, w, h, S, W: w * S, H: h * S };
 }
 // 比例尺取約四分之一圖寬的整數長度
@@ -404,19 +413,31 @@ function renderPlan() {
     h += `<rect class="corr ${c.status === "不符合" ? "narrow" : ""}" ${rect(r)}/>`;
     if (L.dims) h += `<g class="dim"><text x="${(r.x0 + r.x1) / 2 * S}" y="${r.y1 * S - 3}" text-anchor="middle">淨寬 ${f1(w)}</text></g>`;
   }
-  if (L.stairs) for (const st of SP.stairs) {
-    if (!st.footprint || !st.footprint.length) continue;
-    const r = bb(st.footprint);
-    h += `<rect class="stair" ${rect(r)}/>`;
-    for (let y = r.y0 + 1; y < r.y1; y++) h += `<line class="tread" x1="${r.x0 * S + 4}" x2="${r.x1 * S - 4}" y1="${y * S}" y2="${y * S}"/>`;
-    h += `<text class="lbl" x="${(r.x0 + r.x1) / 2 * S}" y="${r.y0 * S - 8}" text-anchor="middle" style="fill:var(--ok)">${esc(String(st.name || "").slice(-2))}</text>`;
+  // A 的外掛把梯段、平台分圈放在 footprint_loops，逐圈畫；終點未定的樓梯（unresolved_stairs）畫虛線
+  const drawStair = (st, unresolved) => {
+    const loops = (st.footprint_loops || []).filter((l) => Array.isArray(l) && l.length >= 3);
+    if (!loops.length && st.footprint && st.footprint.length) {
+      const r = bb(st.footprint);
+      h += `<rect class="stair" ${rect(r)}/>`;
+      for (let y = r.y0 + 1; y < r.y1; y++) h += `<line class="tread" x1="${r.x0 * S + 4}" x2="${r.x1 * S - 4}" y1="${y * S}" y2="${y * S}"/>`;
+    }
+    for (const l of loops) h += `<polygon class="stair ${unresolved ? "unresolved" : ""}" points="${l.map(pt).join(" ")}"/>`;
+    const all = loops.length ? loops.flat() : st.footprint || [];
+    if (!all.length) return;
+    const r = bb(all);
+    h += `<text class="lbl" x="${(r.x0 + r.x1) / 2 * S}" y="${r.y0 * S - 8}" text-anchor="middle" style="fill:var(--ok)">${esc(String(st.name || "").slice(-2))}${unresolved ? "（終點未定）" : ""}</text>`;
+    if (Array.isArray(st.entry_point)) h += `<circle class="entry" cx="${X(st.entry_point[0])}" cy="${Y(st.entry_point[1])}" r="4"/>`;
+  };
+  if (L.stairs) {
+    SP.stairs.forEach((st) => drawStair(st, false));
+    (SP.unresolved_stairs || []).forEach((st) => drawStair(st, true));
   }
   if (L.rooms) for (const r of b.rooms) {
     const room = SP.rooms.find((x) => x.element_id === r.element_id);
     if (!room || !room.boundary || !room.boundary.length) continue;
     const q = bb(room.boundary);
     const cls = state.view === "legal" ? ST[r.status].plan : (r.hints.length ? "st-hint" : "");
-    h += `<rect class="room ${cls} ${r.element_id === state.sel ? "sel" : ""}" data-id="${esc(r.element_id)}" tabindex="0" role="button" aria-label="${esc(r.name)} ${r.status}" ${rect(q)}/>`;
+    h += `<polygon class="room ${cls} ${r.element_id === state.sel ? "sel" : ""}" data-id="${esc(r.element_id)}" tabindex="0" role="button" aria-label="${esc(r.name)} ${r.status}" points="${room.boundary.map(pt).join(" ")}"/>`;
     const cx = (q.x0 + q.x1) / 2 * S, cy = (q.y0 + q.y1) / 2 * S;
     h += `<text class="lbl" x="${cx}" y="${cy - 2}" text-anchor="middle">${esc(room.number ?? "")} ${ST[r.status].g}</text>`;
     h += `<text class="val" x="${cx}" y="${cy + 14}" text-anchor="middle">${r.facts ? f1(r.facts.distance_m) + " m" : "資料不足"}</text>`;
@@ -428,6 +449,8 @@ function renderPlan() {
   }
   if (sel && sel.facts) {
     if (L.alt) for (const c of sel.facts.candidates.filter((c) => c.stair_id !== sel.facts.stair_id)) {
+      // B 有給每座樓梯的實際路線就照畫，沒有才用舊的水平走廊近似
+      if (Array.isArray(c.path) && c.path.length >= 2) { h += `<polyline class="alt" points="${c.path.map(pt).join(" ")}"/>`; continue; }
       const st = SP.stairs.find((x) => x.element_id === c.stair_id);
       if (!st || !st.entry_point || sel.facts.path.length < 3) continue;
       const p =sel.facts.path.slice(0, 3).concat([[st.entry_point[0], sel.facts.path[2][1]], st.entry_point]);
@@ -492,6 +515,7 @@ function renderDetail() {
       <dt>步行距離</dt><dd><b>${f1(F.distance_m)} m</b></dd><dt>計算終點</dt><dd>${F.endpoint_type === "fire_door" ? "安全梯防火門" : "樓梯第一階"}</dd>
       ${F.candidates.map((c) => `<dt>候選：${esc(c.stair_name)}</dt><dd>${f1(c.distance_m)} m</dd>`).join("")}
       <dt>轉向角</dt><dd>${F.turns.map((t) => Math.round(t.deflection_deg) + "°").join("、")}</dd></dl></div>`;
+    if (F.notes && F.notes.length) h += `<div class="blk human"><h4>計算附註（B 引擎）</h4><ul class="plain">${F.notes.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>`;
   }
   if (G) h += `<div class="blk rule"><h4>法規判定</h4>
       ${G.rules.map((id) => `<p><b>${ruleById[id].article}</b>：${esc(ruleById[id].message)}</p>`).join("")}
@@ -530,7 +554,7 @@ function renderTables() {
 }
 function render() {
   // 換了模型快照，原本選的房間可能不存在，改選第一間
-  const rs = batch().rooms;
+  const rs = batch().rooms.filter(placed);
   if (!rs.some((r) => r.element_id === state.sel)) state.sel = rs.length ? rs[0].element_id : null;
   $("roomsTitle").textContent = `${lvl(batch())} 居室 ・ 點卡片查看詳細檢討`;
   renderMeta(); renderKpis(); renderRooms(); renderPlan(); renderDetail(); renderTables();
