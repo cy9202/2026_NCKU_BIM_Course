@@ -234,23 +234,27 @@ namespace Group3.EgressExporter
         // 樓梯從本層往上 → 最低梯段路徑的起點；樓梯到本層為止 → 最高梯段路徑的終點。穿過本層的樓梯推不出來，保留 null。
         void AutoEndpoint(Stairs stair, StairData data)
         {
-            const double tol = 0.05; // 判斷樓梯底／頂是否在本層的容差（公尺），幾何設定，非法規值
+            // 判斷樓梯底／頂是否在本層的容差（公尺），幾何設定，非法規值。
+            // 樓梯常有幾公分的頂部／基準偏移（例如面材厚度），所以放到 0.2 m，實際差多少寫進 warnings
+            const double tol = 0.2;
             var runs = stair.GetStairsRuns().Select(id => doc.GetElement(id)).OfType<StairsRun>().ToList();
             if (!runs.Any()) return;
             XYZ point = null; string source = null;
-            if (Math.Abs(M(stair.BaseElevation - level.ProjectElevation)) <= tol)
+            double dBase = M(stair.BaseElevation - level.ProjectElevation), dTop = M(stair.TopElevation - level.ProjectElevation), diff = 0;
+            if (Math.Abs(dBase) <= tol && Math.Abs(dBase) <= Math.Abs(dTop))
             {
                 var path = runs.OrderBy(x => x.BaseElevation).First().GetStairsPath().ToList();
-                if (path.Any()) { point = path.First().GetEndPoint(0); source = "auto:lowest_run_path_start"; }
+                if (path.Any()) { point = path.First().GetEndPoint(0); source = "auto:lowest_run_path_start"; diff = dBase; }
             }
-            else if (Math.Abs(M(stair.TopElevation - level.ProjectElevation)) <= tol)
+            else if (Math.Abs(dTop) <= tol)
             {
                 var path = runs.OrderByDescending(x => x.TopElevation).First().GetStairsPath().ToList();
-                if (path.Any()) { point = path.Last().GetEndPoint(1); source = "auto:highest_run_path_end"; }
+                if (path.Any()) { point = path.Last().GetEndPoint(1); source = "auto:highest_run_path_end"; diff = dTop; }
             }
             if (point == null) return;
             data.entry_point = XY(point); data.endpoint_type = "first_step"; data.endpoint_source = source;
-            Warn(stair, "STAIR_ENDPOINT_AUTO", "第一階位置由梯段路徑自動推得（" + source + "），需確認；結果會標需人工確認。");
+            Warn(stair, "STAIR_ENDPOINT_AUTO", "第一階位置由梯段路徑自動推得（" + source + "，樓梯端點和本層高差 "
+                + diff.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture) + " m），需確認；結果會標需人工確認。");
         }
         void ReadCorridor(CorridorSetting setting)
         {
