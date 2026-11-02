@@ -103,7 +103,11 @@
   function walkNetwork(corridors, spaces, doors, stairs, obstacles) {
     const ends = [
       ...doors.map((d) => ({ p: d.position, sps: spaces.filter((s) => (d.room_ids || []).includes(s.element_id)) })),
-      ...stairs.map((st) => ({ p: st.entry_point, sps: spaces.filter((s) => inPoly(st.entry_point, s.boundary) >= 0) })),
+      // 樓梯終點在空間裡就直接用；不在任何空間裡（例如防火門的插入點在牆裡），才和門一樣接到旁邊空間的外框
+      ...stairs.map((st) => {
+        const inside = spaces.filter((s) => inPoly(st.entry_point, s.boundary) >= 0);
+        return { p: st.entry_point, sps: inside.length ? inside : spaces.filter((s) => gateOn(st.entry_point, s.boundary)) };
+      }),
     ];
     const viaCorridor = ends.filter((e) => !e.sps.length);
     const net = corridorNetwork(corridors, viaCorridor.map((e) => e.p), spaces.map((s) => s.boundary));
@@ -120,9 +124,9 @@
       s.boundary.forEach(net.nodeOf);
       turnPoints(s.boundary, obstacles).forEach(net.nodeOf);
       // 門的座標常在牆心、落在房間外框外：門先走到這個空間外框上最近的點，再進空間
-      doors.forEach((d, i) => {
-        if (!(d.room_ids || []).includes(s.element_id) || node[i] == null) return;
-        const g = gateOn(d.position, s.boundary);
+      ends.forEach((e, i) => {
+        if (!e.sps.includes(s) || node[i] == null) return;
+        const g = gateOn(e.p, s.boundary);
         if (!g) return;
         let k = net.nodeOf(g);
         if (inPoly(net.nodes[k], s.boundary) < 0) { net.nodes.push(g); k = net.nodes.length - 1; }
