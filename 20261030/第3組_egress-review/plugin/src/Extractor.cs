@@ -47,7 +47,6 @@ namespace Group3.EgressExporter
         readonly Phase phase;
         readonly ExportSettings settings;
         readonly Snapshot result = new Snapshot();
-        readonly List<string> doorsWithoutWidth = new List<string>();
         public Extractor(Document doc, Level level, Phase phase, ExportSettings settings)
         { this.doc = doc; this.level = level; this.phase = phase; this.settings = settings; }
         static string Id(Element e) => e.Id.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -95,9 +94,6 @@ namespace Group3.EgressExporter
             foreach (var stair in result.stairs.Where(s => s.entry_point == null).ToList()) {
                 result.stairs.Remove(stair); result.unresolved_stairs.Add(stair);
             }
-            if (doorsWithoutWidth.Any())
-                result.warnings.Add(new WarningData { code = "DOOR_NO_CLEAR_WIDTH", element_ids = doorsWithoutWidth,
-                    message = doorsWithoutWidth.Count + " 扇門缺少有效淨寬；不採用一般門寬代替。目前的距離計算不使用淨寬，檢討門寬時再填。" });
             foreach (var r in result.rooms.Where(r => r.door_ids.Count == 0))
                 Warn(doc.GetElement(r.unique_id), "ROOM_NO_DOOR", "沒有找到與此房間關聯的門。", "error");
             foreach (var multi in All<MultistoryStairs>())
@@ -118,7 +114,6 @@ namespace Group3.EgressExporter
                 Warn(r, "ROOM_NOT_PLACED", "房間未放置，無法歸屬所選樓層。", "error");
             // 有通行空間時，B 的引擎可以直接在房間裡排路線，不一定需要中心線
             if (!result.corridors.Any() && !result.rooms.Any(r => r.is_circulation == true)) Warn(null, "NO_CORRIDOR_CENTERLINE", "未設定走廊中心線；可在設定檔指定曲線，或先確認房間的 is_circulation。");
-            Warn(null, "OBSTACLE_SCOPE", "柱子以保守包圍框擷取；設備、家具、矮牆等未完整納入。快照需覆核，不能直接作為法規核定結果。");
             result.warnings = result.warnings.OrderBy(w => w.element_id, StringComparer.Ordinal)
                 .ThenBy(w => w.code, StringComparer.Ordinal).ThenBy(w => w.message, StringComparer.Ordinal).ToList();
             return result;
@@ -255,7 +250,6 @@ namespace Group3.EgressExporter
             }
             result.doors.Add(data);
             foreach (var r in rooms) r.door_ids.Add(data.element_id);
-            if (!data.clear_width_m.HasValue) doorsWithoutWidth.Add(data.element_id);
             // 開在外牆、一側有房間的門是室外門，本來就只連到一間房
             bool exteriorDoor = rooms.Count == 1 && door.Host is Wall hostWall && hostWall.WallType.Function == WallFunction.Exterior;
             if (rooms.Count < 2 && !exteriorDoor) Warn(door, "DOOR_ROOM_ASSOCIATION_INCOMPLETE", "只找到 " + rooms.Count + " 個本樓層相鄰房間；可能為室外門、未建模通道或房間計算點問題。");

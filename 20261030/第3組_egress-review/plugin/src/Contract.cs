@@ -86,8 +86,6 @@ namespace Group3.EgressExporter
     {
         [DataMember] public string element_id, code, message;
         [DataMember] public string severity = "warning";
-        // 同一問題合併成一筆時，列出所有相關元件；element_id 留 null。
-        [DataMember(EmitDefaultValue = false)] public List<string> element_ids;
     }
     // 把模型快照放進檢討網頁：產出的 html 不用網路、不用另外匯入，打開就是這個模型
     public static class ReportBuilder
@@ -133,11 +131,8 @@ namespace Group3.EgressExporter
                 if (group == null) { group = new WarningGroup { code = w.code, message = w.message, severity = w.severity }; groups.Add(group); }
                 if (w.severity == "error") group.severity = "error";
                 if (group.message != w.message && !group.message.EndsWith(VariesNote, StringComparison.Ordinal)) group.message += VariesNote;
-                var ids = new List<string>();
-                if (w.element_ids != null) ids.AddRange(w.element_ids);
-                if (w.element_id != null) ids.Add(w.element_id);
-                foreach (var id in ids) if (!group.element_ids.Contains(id)) group.element_ids.Add(id);
-                group.count = Math.Max(group.count + (w.element_ids == null ? 1 : 0), group.element_ids.Count);
+                if (w.element_id != null && !group.element_ids.Contains(w.element_id)) group.element_ids.Add(w.element_id);
+                group.count++;
             }
             groups.Sort((a, b) => {
                 int rank = (a.severity == "error" ? 0 : 1).CompareTo(b.severity == "error" ? 0 : 1);

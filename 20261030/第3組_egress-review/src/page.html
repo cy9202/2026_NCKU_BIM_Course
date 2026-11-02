@@ -561,8 +561,8 @@ function renderTables() {
   const b = batch();
   $("corrBody").innerHTML = b.corridors.map((c) => `<tr><td>${esc(c.name)}<div class="muted mono" style="font-size:.72rem">${c.element_id}</div></td>
     <td class="n">${f1(c.clear_width_m)}</td><td class="n">${f1(c.required_m)}</td><td>${c.rule ? ruleById[c.rule].article : "—"}</td><td>${badge(c.status)}${c.reasons.map((x) => `<div class="muted" style="font-size:.72rem">${esc(x)}</div>`).join("")}</td></tr>`).join("");
-  $("fixBody").innerHTML = b.fix_list.map((f) => `<tr><td class="mono">${f.element_id}</td><td>${esc(f.issue)}</td><td>${f.source}</td>
-    <td><button class="ghost sel-btn" data-id="${f.element_id}" style="padding:3px 8px;font-size:.78rem">在 Revit 選取</button></td></tr>`).join("");
+  $("fixBody").innerHTML = b.fix_list.map((f) => `<tr><td class="mono">${f.element_id == null ? "—" : esc(f.element_id)}</td><td>${esc(f.issue)}</td><td>${f.source}</td>
+    <td>${f.element_id == null ? "" : `<button class="ghost sel-btn" data-id="${esc(f.element_id)}" style="padding:3px 8px;font-size:.78rem">在 Revit 選取</button>`}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">沒有需要修正的項目。</td></tr>`;
   document.querySelectorAll(".sel-btn").forEach((el) => el.addEventListener("click", () => {
     $("toast").textContent = `原型未連接 Revit：正式版會請外掛選取 ElementId ${el.dataset.id} 並切到該視圖。`;
   }));

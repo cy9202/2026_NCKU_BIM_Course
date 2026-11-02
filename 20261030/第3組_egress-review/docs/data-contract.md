@@ -75,7 +75,7 @@
 
 **obstacles**（選填，沒有就當房內無障礙物）：柱子等固定障礙物，也包含房間內圈（`category` 是 `"room_inner_boundary"`，`element_id` 是房間）。`element_id`、`unique_id`、`category`（例如 `"Structural Columns"`）、`footprint`（平面輪廓，照順序繞一圈）。
 
-**warnings**：擷取時發現的問題，每筆有 `element_id`、`code`、`message`。例如 `ROOM_NOT_ENCLOSED`、`DOOR_NO_CLEAR_WIDTH`。同一問題合併成一筆時（目前是 `DOOR_NO_CLEAR_WIDTH`），`element_id` 是 `null`，元件列在 `element_ids`。
+**warnings**：擷取時發現的問題，每筆有 `element_id`、`code`、`message`。例如 `ROOM_NOT_ENCLOSED`、`DOOR_NO_CLEAR_WIDTH`。
 
 ## 2 專案設定（使用者手選，程式不可從房間名稱推測）
 

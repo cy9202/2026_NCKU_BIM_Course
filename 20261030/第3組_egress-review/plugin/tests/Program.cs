@@ -94,16 +94,12 @@ static class Program
             var detached = new List<double[]> { P(20,0), P(21,0), P(21,1), P(20,1) };
             Check(Geometry.OuterLoop(new List<List<double[]>> { ring, detached }, out innerLoops) == null, "a detached region is not treated as an inner loop");
             var grouped = WarningSummary.Group(new[] {
-                new WarningData { code = "DOOR_NO_CLEAR_WIDTH", element_ids = new List<string> { "1", "2", "3" }, message = "m" },
                 new WarningData { code = "ROOM_NOT_ENCLOSED", element_id = "9", severity = "error", message = "m" },
                 new WarningData { code = "ROOM_NOT_ENCLOSED", element_id = "8", severity = "error", message = "m" },
                 new WarningData { code = "OBSTACLE_SCOPE", message = "m" } });
-            Check(grouped.Count == 3 && grouped[0].code == "ROOM_NOT_ENCLOSED" && grouped[0].count == 2 && grouped[0].element_ids.Count == 2,
+            Check(grouped.Count == 2 && grouped[0].code == "ROOM_NOT_ENCLOSED" && grouped[0].count == 2 && grouped[0].element_ids.Count == 2,
                 "same-code warnings collapse to one row with errors listed first");
-            Check(grouped.Single(g => g.code == "DOOR_NO_CLEAR_WIDTH").count == 3 && grouped.Single(g => g.code == "OBSTACLE_SCOPE").count == 1,
-                "a merged warning counts its elements and a project-wide warning counts once");
-            JsonFile.Write(file, new Snapshot { warnings = new List<WarningData> { new WarningData { code = "OBSTACLE_SCOPE", message = "m" } } });
-            Check(!File.ReadAllText(file).Contains("element_ids"), "single warnings do not add an element_ids field to the snapshot");
+            Check(grouped.Single(g => g.code == "OBSTACLE_SCOPE").count == 1, "a project-wide warning counts once");
         }
         finally { if (File.Exists(file)) File.Delete(file); }
     }

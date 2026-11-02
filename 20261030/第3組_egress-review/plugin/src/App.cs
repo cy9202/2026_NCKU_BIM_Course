@@ -213,7 +213,7 @@ namespace Group3.EgressExporter
             Controls.Add(layout);
             var groups = WarningSummary.Group(snapshot.warnings);
             int mustFix = groups.Count(g => g.severity == "error");
-            layout.Controls.Add(new Label { Dock = DockStyle.Fill, Text = $"{snapshot.project.level.name}／{snapshot.project.phase}　房間 {snapshot.rooms.Count}　門 {snapshot.doors.Count}（另有待定位 {snapshot.unresolved_doors.Count}）\n樓梯 {snapshot.stairs.Count + snapshot.unresolved_stairs.Count}（未列入計算 {snapshot.unresolved_stairs.Count}）　走廊 {snapshot.corridors.Count}　要處理 {mustFix} 類、提醒 {groups.Count - mustFix} 類（不代表法規判定）\n{path}" }, 0, 0);
+            layout.Controls.Add(new Label { Dock = DockStyle.Fill, Text = $"{snapshot.project.level.name}／{snapshot.project.phase}　房間 {snapshot.rooms.Count}　門 {snapshot.doors.Count}（另有待定位 {snapshot.unresolved_doors.Count}）\n樓梯 {snapshot.stairs.Count + snapshot.unresolved_stairs.Count}（未列入計算 {snapshot.unresolved_stairs.Count}）　走廊 {snapshot.corridors.Count}　{(groups.Count == 0 ? "沒有需要處理的項目" : $"要處理 {mustFix} 類、提醒 {groups.Count - mustFix} 類")}（不代表法規判定）\n{path}" }, 0, 0);
             var grid = new DataGridView { Dock = DockStyle.Fill, ReadOnly = true, AllowUserToAddRows = false, AllowUserToDeleteRows = false, RowHeadersVisible = false,
                 AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, SelectionMode = DataGridViewSelectionMode.FullRowSelect };
             grid.Columns.Add("level", "等級"); grid.Columns.Add("code", "問題代碼"); grid.Columns.Add("count", "件數"); grid.Columns.Add("message", "說明");
