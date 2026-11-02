@@ -16,9 +16,22 @@ namespace Group3.EgressExporter
     {
         readonly bool stairs;
         internal ElementKindFilter(bool stairs) { this.stairs = stairs; }
-        public bool AllowElement(Element e) => e.DesignOption == null && (stairs ? e is Stairs :
+        public bool AllowElement(Element e) => e.DesignOption == null && (stairs ? StairKind.IsStair(e) :
             e is FamilyInstance && e.Category?.Id.Value == (long)BuiltInCategory.OST_Doors);
         public bool AllowReference(Reference reference, XYZ position) => false;
+    }
+    // 樓梯品類的元件：元件式樓梯（Stairs），或非元件式的舊式樓梯、樓梯族群
+    internal static class StairKind
+    {
+        internal static bool IsStair(Element e) => e is Stairs || e.Category?.Id.Value == (long)BuiltInCategory.OST_Stairs;
+        // 非元件式樓梯沒有底／頂高程屬性，用包圍框高度判斷；0.2 m 是幾何容差，非法規值
+        internal static bool CrossesLevel(Element e, Level level)
+        {
+            double tol = UnitUtils.ConvertToInternalUnits(0.2, UnitTypeId.Meters), z = level.ProjectElevation;
+            if (e is Stairs s) return z >= s.BaseElevation - 0.01 && z <= s.TopElevation + 0.01;
+            var b = e.get_BoundingBox(null);
+            return b != null && z >= b.Min.Z - tol && z <= b.Max.Z + tol;
+        }
     }
     internal static class PointInteraction
     {
@@ -43,9 +56,9 @@ namespace Group3.EgressExporter
         internal static void CheckElement(Element element, Level level, Phase phase)
         {
             if (!RevitPositions.Exists(element, phase)) throw new ArgumentException("元件不在主模型或本視圖階段。");
-            if (element is Stairs stair)
+            if (StairKind.IsStair(element))
             {
-                if (level.ProjectElevation < stair.BaseElevation - 0.01 || level.ProjectElevation > stair.TopElevation + 0.01)
+                if (!StairKind.CrossesLevel(element, level))
                     throw new ArgumentException("樓梯沒有跨越本樓層，請切換正確樓層。");
             }
             else if (element is FamilyInstance door && door.LevelId != level.Id &&
@@ -151,15 +164,15 @@ namespace Group3.EgressExporter
             {
                 var uiDoc = command.Application.ActiveUIDocument;
                 PointInteraction.Scope(uiDoc, out var level, out var phase);
-                var stair = (Stairs)PointInteraction.Select(uiDoc, true);
+                Element stair = PointInteraction.Select(uiDoc, true);
                 PointInteraction.CheckElement(stair, level, phase);
                 var settings = LocalSettings.Load(uiDoc.Document, level, phase);
                 string endpointType; bool? direct;
                 // 逐層建模的樓梯在同一樓梯間有上、下兩個元件，平面上外框重疊，點到哪個不一定，所以讓使用者直接選
-                var choices = OverlappingStairs(uiDoc.Document, stair, level, phase);
-                bool IsSet(Stairs s) => settings.stairs.Any(x => x != null && x.unique_id == s.UniqueId && x.picked_point != null);
+                var choices = stair is Stairs component ? OverlappingStairs(uiDoc.Document, component, level, phase).Cast<Element>().ToList() : new System.Collections.Generic.List<Element> { stair };
+                bool IsSet(Element s) => settings.stairs.Any(x => x != null && x.unique_id == s.UniqueId && x.picked_point != null);
                 // 第一階存的位置離這座樓梯自己的梯段路徑超過 0.5 m，多半是點成重疊的另一座（操作提醒，非法規值）
-                bool LooksOff(Stairs s)
+                bool LooksOff(Element s)
                 {
                     var saved = settings.stairs.FirstOrDefault(x => x != null && x.unique_id == s.UniqueId && x.picked_point != null && x.endpoint_type == "first_step");
                     var path = saved == null ? null : FirstStepHint(uiDoc.Document, s, level);
@@ -230,9 +243,10 @@ namespace Group3.EgressExporter
             return list;
         }
         // 給使用者核對用的位置，和匯出時自動推算第一階的方式相同；實際終點仍以使用者點選的為準
-        static XYZ FirstStepHint(Document doc, Stairs stair, Level level) => StairEndpoint.Detect(doc, stair, level, out _, out _);
-        internal static string Describe(Stairs stair, Level level)
+        static XYZ FirstStepHint(Document doc, Element stair, Level level) => stair is Stairs s ? StairEndpoint.Detect(doc, s, level, out _, out _) : null;
+        internal static string Describe(Element element, Level level)
         {
+            if (!(element is Stairs stair)) return "樓梯 " + element.Id.Value + "：非元件式，請手動點選第一階";
             double tol = UnitUtils.ConvertToInternalUnits(0.2, UnitTypeId.Meters); // 判斷樓梯底／頂是否在本層，幾何容差，非法規值
             string direction = Math.Abs(stair.TopElevation - level.ProjectElevation) <= tol ? "往下（從下層到本層）" :
                 Math.Abs(stair.BaseElevation - level.ProjectElevation) <= tol ? "往上（從本層到上層）" : "穿過本層";
@@ -249,8 +263,13 @@ namespace Group3.EgressExporter
             {
                 var uiDoc = command.Application.ActiveUIDocument;
                 PointInteraction.Scope(uiDoc, out var level, out var phase);
-                var picked = (Stairs)PointInteraction.Select(uiDoc, true);
-                PointInteraction.CheckElement(picked, level, phase);
+                var element = PointInteraction.Select(uiDoc, true);
+                PointInteraction.CheckElement(element, level, phase);
+                if (!(element is Stairs picked))
+                {
+                    TaskDialog.Show("選擇直通梯", "這座樓梯不是 Revit 的元件式樓梯（可能是舊式草圖樓梯或樓梯族群），外掛偵測不到第一階。\n請改用「手動指定樓梯終點」，在平面圖點選第一階。");
+                    return Result.Cancelled;
+                }
                 var doc = uiDoc.Document;
                 var settings = LocalSettings.Load(doc, level, phase);
                 var choices = SetStairEndpointCommand.OverlappingStairs(doc, picked, level, phase);

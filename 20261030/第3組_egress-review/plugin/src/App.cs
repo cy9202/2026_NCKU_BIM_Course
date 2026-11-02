@@ -128,6 +128,8 @@ namespace Group3.EgressExporter
         public Phase SelectedPhase => (Phase)phases.SelectedItem;
         public string SettingsPath => settings.Text.Trim();
         public string OutputPath { get; private set; }
+        readonly Label roomInfo = new Label { AutoSize = true, MaximumSize = new System.Drawing.Size(640, 0) };
+        int RoomCount;
         readonly ComboBox useGroup = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
         readonly TextBox floor = new TextBox { Dock = DockStyle.Fill };
         readonly ComboBox fire = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
@@ -146,9 +148,9 @@ namespace Group3.EgressExporter
         }
         public ExportForm(Document doc)
         {
-            Text = "第三組｜Revit 模型資料擷取"; Width = 720; Height = 520;
+            Text = "第三組｜Revit 模型資料擷取"; Width = 720; Height = 560;
             StartPosition = FormStartPosition.CenterParent; AutoScaleMode = AutoScaleMode.Dpi;
-            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(18), ColumnCount = 3, RowCount = 8 };
+            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(18), ColumnCount = 3, RowCount = 9 };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
@@ -176,6 +178,21 @@ namespace Group3.EgressExporter
             LoadReviewSettings(doc);
             levels.SelectedIndexChanged += (s, e) => LoadReviewSettings(doc);
             phases.SelectedIndexChanged += (s, e) => LoadReviewSettings(doc);
+            // 這一層、這個階段有幾間已放置的房間：選錯階段時房間會是 0，提早發現
+            roomInfo.Text = "";
+            void UpdateRoomInfo()
+            {
+                if (SelectedLevel == null || SelectedPhase == null) return;
+                int n = new FilteredElementCollector(doc).OfClass(typeof(SpatialElement)).OfType<Autodesk.Revit.DB.Architecture.Room>()
+                    .Count(r => r.LevelId == SelectedLevel.Id && r.Area > 0 && r.get_Parameter(BuiltInParameter.ROOM_PHASE)?.AsElementId() == SelectedPhase.Id);
+                RoomCount = n;
+                roomInfo.Text = n > 0 ? "這個樓層、階段有 " + n + " 間已放置的房間。" : "這個樓層、階段沒有已放置的房間，請確認階段是否選對。";
+                roomInfo.ForeColor = n > 0 ? System.Drawing.SystemColors.ControlText : System.Drawing.Color.Firebrick;
+            }
+            UpdateRoomInfo();
+            levels.SelectedIndexChanged += (s, e) => UpdateRoomInfo();
+            phases.SelectedIndexChanged += (s, e) => UpdateRoomInfo();
+            layout.Controls.Add(roomInfo, 0, 7); layout.SetColumnSpan(roomInfo, 3);
             layout.Controls.Add(new Label { Text = "設定（選填）", AutoSize = true }, 0, 6); layout.Controls.Add(settings, 1, 6);
             var browse = new Button { Text = "選擇 JSON", Dock = DockStyle.Fill };
             browse.Click += (s, e) => { using (var dialog = new OpenFileDialog { Filter = "JSON|*.json" }) if (dialog.ShowDialog(this) == DialogResult.OK) settings.Text = dialog.FileName; };
@@ -185,6 +202,7 @@ namespace Group3.EgressExporter
             var export = new Button { Text = "匯出快照…", AutoSize = true };
             export.Click += (s, e) => {
                 if (SelectedLevel == null || SelectedPhase == null) { MessageBox.Show(this, "請選擇樓層與階段。"); return; }
+                if (RoomCount == 0 && MessageBox.Show(this, "這個樓層、階段沒有已放置的房間，匯出後不會有任何檢討結果。\n多半是階段選錯了。仍要匯出嗎？", "沒有房間", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
                 if (UseGroup == null) { MessageBox.Show(this, "請選擇使用類組。外掛不從房間名稱推測。"); return; }
                 if (!int.TryParse(floor.Text.Trim(), System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture, out var floorNumber) || floorNumber == 0 || floorNumber < -5 || floorNumber > 120)
                 { MessageBox.Show(this, "請填這是第幾層：地上填 1、2、3…，地下填 -1、-2…。"); return; }
@@ -197,7 +215,7 @@ namespace Group3.EgressExporter
                     OutputPath = dialog.FileName; DialogResult = DialogResult.OK;
                 }
             };
-            buttons.Controls.Add(cancel); buttons.Controls.Add(export); layout.Controls.Add(buttons, 0, 7); layout.SetColumnSpan(buttons, 3);
+            buttons.Controls.Add(cancel); buttons.Controls.Add(export); layout.Controls.Add(buttons, 0, 8); layout.SetColumnSpan(buttons, 3);
             AcceptButton = export; CancelButton = cancel;
         }
     }

@@ -90,6 +90,9 @@ namespace Group3.EgressExporter
                 .Where(e => MainModel(e) && Exists(e))) Safe(door, () => ReadDoor(door));
             foreach (var stair in All<Stairs>().Where(e => MainModel(e) && Exists(e)))
                 Safe(stair, () => ReadStair(stair));
+            foreach (var legacy in new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Stairs).WhereElementIsNotElementType()
+                .Where(e => !(e is Stairs) && MainModel(e) && Exists(e) && StairKind.CrossesLevel(e, level)).OrderBy(e => e.Id.Value).ToList())
+                Safe(legacy, () => ReadLegacyStair(legacy));
             KeepOnlySelectedStairs();
             foreach (var stair in result.stairs.Where(s => s.entry_point == null).ToList()) {
                 result.stairs.Remove(stair); result.unresolved_stairs.Add(stair);
@@ -98,9 +101,6 @@ namespace Group3.EgressExporter
                 Warn(doc.GetElement(r.unique_id), "ROOM_NO_DOOR", "沒有找到與此房間關聯的門。", "error");
             foreach (var multi in All<MultistoryStairs>())
                 Warn(multi, "MULTISTORY_STAIRS_REVIEW", "多層樓梯的重複實例尚未完整展開；請逐樓層核對樓梯數量與終點。", "error");
-            foreach (var legacy in new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Stairs)
-                .WhereElementIsNotElementType().Where(e => !(e is Stairs)))
-                Warn(legacy, "STAIR_UNSUPPORTED_TYPE", "非元件式樓梯尚未支援；保留元件編號供人工修正。", "error");
             foreach (var corridor in settings.corridors) ReadCorridor(corridor);
             ReadColumns();
             foreach (var link in All<RevitLinkInstance>())
@@ -261,6 +261,32 @@ namespace Group3.EgressExporter
             var curve = location.Curve;
             var hit = curve.Project(new XYZ(point.X, point.Y, curve.GetEndPoint(0).Z));
             return hit != null && hit.Distance <= wall.Width / 2 + UnitUtils.ConvertToInternalUnits(0.001, UnitTypeId.Meters);
+        }
+        // 非元件式樓梯（舊式草圖樓梯、樓梯族群）讀不到梯段，只能用「手動指定樓梯終點」點的位置；外框用包圍框，只供畫面顯示
+        void ReadLegacyStair(Element stair)
+        {
+            var box = RevitPositions.BoxCorners(stair);
+            double x0 = M(box.Min(p => p.X)), x1 = M(box.Max(p => p.X)), y0 = M(box.Min(p => p.Y)), y1 = M(box.Max(p => p.Y));
+            var data = new StairData { element_id = Id(stair), unique_id = stair.UniqueId, name = stair.Name,
+                footprint = new List<double[]> { new[] { x0, y0 }, new[] { x1, y0 }, new[] { x1, y1 }, new[] { x0, y1 } } };
+            data.footprint_loops.Add(data.footprint);
+            result.stairs.Add(data);
+            var mapping = settings.stairs.SingleOrDefault(x => x.unique_id == stair.UniqueId);
+            data.is_direct_stair = mapping?.is_direct_stair;
+            if (mapping?.picked_point != null)
+            {
+                try
+                {
+                    RevitPositions.Validate(stair, level, mapping.picked_point, true);
+                    data.entry_point = mapping.picked_point.point_m.Take(2).ToArray(); data.endpoint_type = mapping.endpoint_type ?? "first_step";
+                    data.endpoint_source = mapping.picked_point.source;
+                }
+                catch (Exception ex) { Warn(stair, "STAIR_ENDPOINT_STALE", ex.Message, "error"); }
+            }
+            if (data.entry_point == null && mapping?.is_direct_stair != false)
+                Warn(stair, "STAIR_ENDPOINT_UNCONFIRMED", "非元件式樓梯（舊式草圖樓梯或樓梯族群），外掛偵測不到第一階；請用「手動指定樓梯終點」點選。", "error");
+            else if (data.entry_point != null && !data.is_direct_stair.HasValue)
+                Warn(stair, "STAIR_DIRECT_UNCONFIRMED", "還沒確認是否為直通樓梯；仍列入計算候選，但結果會標需人工確認。請用「手動指定樓梯終點」選擇資格。");
         }
         void ReadStair(Stairs stair)
         {
