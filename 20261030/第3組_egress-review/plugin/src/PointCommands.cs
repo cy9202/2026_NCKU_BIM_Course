@@ -254,7 +254,7 @@ namespace Group3.EgressExporter
         }
     }
     // 主要流程：點一下樓梯，外掛列出這個位置的樓梯和偵測到的第一階，使用者只要勾要用哪幾座
-    [Transaction(TransactionMode.ReadOnly)]
+    [Transaction(TransactionMode.Manual)]
     public sealed class SelectDirectStairsCommand : IExternalCommand
     {
         public Result Execute(ExternalCommandData command, ref string message, ElementSet elements)
@@ -265,13 +265,21 @@ namespace Group3.EgressExporter
                 PointInteraction.Scope(uiDoc, out var level, out var phase);
                 var element = PointInteraction.Select(uiDoc, true);
                 PointInteraction.CheckElement(element, level, phase);
-                if (!(element is Stairs picked))
-                {
-                    TaskDialog.Show("選擇直通梯", "這座樓梯不是 Revit 的元件式樓梯（可能是舊式草圖樓梯或樓梯族群），外掛偵測不到第一階。\n請改用「手動指定樓梯終點」，在平面圖點選第一階。");
-                    return Result.Cancelled;
-                }
                 var doc = uiDoc.Document;
                 var settings = LocalSettings.Load(doc, level, phase);
+                // 非元件式樓梯（舊式草圖樓梯、樓梯族群）讀不到梯段，同一個按鈕改成請使用者點第一階
+                if (!(element is Stairs picked))
+                {
+                    var point = PointInteraction.Pick(uiDoc, level, "樓梯 " + element.Id.Value + " 不是元件式樓梯，外掛偵測不到第一階：請在平面圖點選第一階位置（Esc 取消）");
+                    var saved = PointInteraction.Capture(element, point, "user_picked_plan_point");
+                    RevitPositions.Validate(element, level, saved, true);
+                    if (!PointInteraction.Confirm("選擇直通梯", level.Name + "／" + phase.Name + "\n樓梯 " + element.Id.Value + "（非元件式）\n第一階 " +
+                        PointInteraction.Coordinates(point) + "\n儲存後這座樓梯會當直通樓梯計算。")) return Result.Cancelled;
+                    PointRules.SetStair(settings, new StairSetting { unique_id = element.UniqueId, is_direct_stair = true, endpoint_type = "first_step", picked_point = saved });
+                    LocalSettings.Save(doc, level, phase, settings);
+                    TaskDialog.Show("選擇直通梯", "已儲存樓梯 " + element.Id.Value + "。這一層只會用選定的樓梯計算；其他位置還有直通梯的話，請再按一次這個按鈕。");
+                    return Result.Succeeded;
+                }
                 var choices = SetStairEndpointCommand.OverlappingStairs(doc, picked, level, phase);
                 var rows = choices.Select(s => {
                     var point = StairEndpoint.Detect(doc, s, level, out _, out _);
@@ -312,7 +320,7 @@ namespace Group3.EgressExporter
             Controls.Add(layout);
             layout.Controls.Add(new Label { AutoSize = true, Padding = new Padding(0, 0, 0, 10), Text = level + "／" + phase + "\n勾選要當直通樓梯使用的樓梯，第一階位置由外掛從梯段路徑偵測。" }, 0, 0);
             foreach (var row in rows) list.Items.Add(row.Label, row.Checked);
-            // 偵測不到位置的樓梯不能勾，要用「手動指定樓梯終點」
+            // 偵測不到位置的樓梯不能勾，要用「手動指定樓梯終點」點選
             list.ItemCheck += (s, e) => { if (!rows[e.Index].Detected) e.NewValue = CheckState.Unchecked; };
             layout.Controls.Add(list, 0, 1);
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft };

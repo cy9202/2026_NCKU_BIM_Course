@@ -24,10 +24,6 @@ namespace Group3.EgressExporter
             button.ToolTip = "唯讀匯出房間、門、樓梯、走廊與 warnings；不執行法規判定。";
             panel.AddItem(new PushButtonData("Group3SelectStairs", "選擇\n直通梯",
                 Assembly.GetExecutingAssembly().Location, typeof(SelectDirectStairsCommand).FullName));
-            panel.AddItem(new PushButtonData("Group3Ids", "查看所選\n元件識別碼",
-                Assembly.GetExecutingAssembly().Location, typeof(InspectSelectionCommand).FullName));
-            panel.AddItem(new PushButtonData("Group3DoorPoint", "設定門\n位置",
-                Assembly.GetExecutingAssembly().Location, typeof(SetDoorPositionCommand).FullName));
             panel.AddItem(new PushButtonData("Group3StairPoint", "手動指定\n樓梯終點",
                 Assembly.GetExecutingAssembly().Location, typeof(SetStairEndpointCommand).FullName));
             return Result.Succeeded;
@@ -155,7 +151,7 @@ namespace Group3.EgressExporter
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
             Controls.Add(layout);
-            var note = new Label { Text = "選擇一個樓層與階段。只擷取主文件／主模型；不修改 Revit 元件。\n設定留空：自動使用「設定門位置／樓梯終點」儲存的本機設定。選擇 JSON：改用該檔。",
+            var note = new Label { Text = "選擇一個樓層與階段。只擷取主文件／主模型；不修改 Revit 元件。\n設定留空：自動使用「選擇直通梯」儲存的本機設定。選擇 JSON：改用該檔。",
                 AutoSize = true, MaximumSize = new System.Drawing.Size(640, 0), Padding = new Padding(0, 0, 0, 18) };
             layout.Controls.Add(note, 0, 0); layout.SetColumnSpan(note, 3);
             layout.Controls.Add(new Label { Text = "樓層", AutoSize = true }, 0, 1); layout.Controls.Add(levels, 1, 1); layout.SetColumnSpan(levels, 2);

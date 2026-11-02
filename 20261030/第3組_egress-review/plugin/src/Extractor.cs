@@ -239,13 +239,19 @@ namespace Group3.EgressExporter
                 data.position = XY(candidate);
                 // 插入點落在主體牆上就是這扇門的門洞；只有對不上時才需要人看
                 if (!OnHostWall(door, candidate))
-                    Warn(door, "DOOR_INSERTION_POINT", "族群插入點不在主體牆上；需確認它位在實際可通行門口，或用「設定門位置」修正。");
+                    Warn(door, "DOOR_INSERTION_POINT", "族群插入點不在主體牆上；請確認門的位置，路線會從這個點進出。");
+            }
+            // 沒有插入點的門（例如帷幕牆上的門）用外框中心當位置，並提醒是近似值
+            else if (candidate != null)
+            {
+                data.position = XY(candidate);
+                Warn(door, "DOOR_POSITION_APPROX", "這扇門沒有插入點（例如帷幕牆上的門），位置用外框中心近似；距離可能有些微誤差。");
             }
             if (data.position == null)
             {
                 data.position_confirmed = false;
                 result.unresolved_doors.Add(data);
-                Warn(door, "DOOR_POSITION_UNCONFIRMED", "門已擷取但位置待確認；請在本樓層使用「設定門位置」。候選點不會加入計算路網。", "error");
+                Warn(door, "DOOR_POSITION_UNCONFIRMED", "門已擷取但讀不到位置，不列入計算；請確認這扇門有幾何。", "error");
                 return;
             }
             result.doors.Add(data);
@@ -262,7 +268,7 @@ namespace Group3.EgressExporter
             var hit = curve.Project(new XYZ(point.X, point.Y, curve.GetEndPoint(0).Z));
             return hit != null && hit.Distance <= wall.Width / 2 + UnitUtils.ConvertToInternalUnits(0.001, UnitTypeId.Meters);
         }
-        // 非元件式樓梯（舊式草圖樓梯、樓梯族群）讀不到梯段，只能用「手動指定樓梯終點」點的位置；外框用包圍框，只供畫面顯示
+        // 非元件式樓梯（舊式草圖樓梯、樓梯族群）讀不到梯段，只能用使用者點的位置（「選擇直通梯」會請使用者點）；外框用包圍框，只供畫面顯示
         void ReadLegacyStair(Element stair)
         {
             var box = RevitPositions.BoxCorners(stair);
@@ -284,9 +290,9 @@ namespace Group3.EgressExporter
                 catch (Exception ex) { Warn(stair, "STAIR_ENDPOINT_STALE", ex.Message, "error"); }
             }
             if (data.entry_point == null && mapping?.is_direct_stair != false)
-                Warn(stair, "STAIR_ENDPOINT_UNCONFIRMED", "非元件式樓梯（舊式草圖樓梯或樓梯族群），外掛偵測不到第一階；請用「手動指定樓梯終點」點選。", "error");
+                Warn(stair, "STAIR_ENDPOINT_UNCONFIRMED", "非元件式樓梯（舊式草圖樓梯或樓梯族群），外掛偵測不到第一階；請按「選擇直通梯」點選這座樓梯，再點第一階。", "error");
             else if (data.entry_point != null && !data.is_direct_stair.HasValue)
-                Warn(stair, "STAIR_DIRECT_UNCONFIRMED", "還沒確認是否為直通樓梯；仍列入計算候選，但結果會標需人工確認。請用「手動指定樓梯終點」選擇資格。");
+                Warn(stair, "STAIR_DIRECT_UNCONFIRMED", "還沒確認是否為直通樓梯；仍列入計算候選，但結果會標需人工確認。請按「選擇直通梯」。");
         }
         void ReadStair(Stairs stair)
         {
