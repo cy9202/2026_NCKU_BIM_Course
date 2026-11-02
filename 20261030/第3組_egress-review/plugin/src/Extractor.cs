@@ -268,7 +268,7 @@ namespace Group3.EgressExporter
             var hit = curve.Project(new XYZ(point.X, point.Y, curve.GetEndPoint(0).Z));
             return hit != null && hit.Distance <= wall.Width / 2 + UnitUtils.ConvertToInternalUnits(0.001, UnitTypeId.Meters);
         }
-        // 非元件式樓梯（舊式草圖樓梯、樓梯族群）讀不到梯段，只能用使用者點的位置（「選擇直通梯」會請使用者點）；外框用包圍框，只供畫面顯示
+        // 非元件式樓梯（舊式草圖樓梯、樓梯族群）讀不到梯段，只能用使用者點的位置或選的防火門（都在「選擇直通梯」設定）；外框用包圍框，只供畫面顯示
         void ReadLegacyStair(Element stair)
         {
             var box = RevitPositions.BoxCorners(stair);
@@ -288,6 +288,13 @@ namespace Group3.EgressExporter
                     data.endpoint_source = mapping.picked_point.source;
                 }
                 catch (Exception ex) { Warn(stair, "STAIR_ENDPOINT_STALE", ex.Message, "error"); }
+            }
+            else if (mapping?.endpoint_type == "fire_door" && !string.IsNullOrWhiteSpace(mapping.endpoint_unique_id))
+            {
+                var door = doc.GetElement(mapping.endpoint_unique_id) as FamilyInstance;
+                if (door == null || !MainModel(door) || !Exists(door) || !(door.Location is LocationPoint lp))
+                    Warn(stair, "STAIR_ENDPOINT_STALE", "安全梯的防火門已移除或不在本階段；請按「選擇直通梯」重新選。", "error");
+                else { data.entry_point = XY(lp.Point); data.endpoint_type = "fire_door"; data.endpoint_source = "user_confirmed:" + door.UniqueId; }
             }
             if (data.entry_point == null && mapping?.is_direct_stair != false)
                 Warn(stair, "STAIR_ENDPOINT_UNCONFIRMED", "非元件式樓梯（舊式草圖樓梯或樓梯族群），外掛偵測不到第一階；請按「選擇直通梯」點選這座樓梯，再點第一階。", "error");
@@ -357,7 +364,7 @@ namespace Group3.EgressExporter
             if (data.entry_point == null) AutoEndpoint(stair, data);
             if (data.entry_point == null) {
                 data.is_direct_stair = data.is_direct_stair == false ? (bool?)false : null;
-                Warn(stair, "STAIR_ENDPOINT_UNCONFIRMED", "偵測不到本層的第一階；請用「手動指定樓梯終點」。不會拿樓梯中心點代替。", "error");
+                Warn(stair, "STAIR_ENDPOINT_UNCONFIRMED", "偵測不到本層的第一階；請按「選擇直通梯」點選這座樓梯，再點第一階。不會拿樓梯中心點代替。", "error");
             }
             if (!data.is_direct_stair.HasValue) Warn(stair, "STAIR_DIRECT_UNCONFIRMED", "還沒選定是否使用這座樓梯；仍列入計算候選，但結果會標需人工確認。請按「選擇直通梯」。");
         }

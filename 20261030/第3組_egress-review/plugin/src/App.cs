@@ -24,8 +24,6 @@ namespace Group3.EgressExporter
             button.ToolTip = "唯讀匯出房間、門、樓梯、走廊與 warnings；不執行法規判定。";
             panel.AddItem(new PushButtonData("Group3SelectStairs", "選擇\n直通梯",
                 Assembly.GetExecutingAssembly().Location, typeof(SelectDirectStairsCommand).FullName));
-            panel.AddItem(new PushButtonData("Group3StairPoint", "手動指定\n樓梯終點",
-                Assembly.GetExecutingAssembly().Location, typeof(SetStairEndpointCommand).FullName));
             return Result.Succeeded;
         }
         public Result OnShutdown(UIControlledApplication app) => Result.Succeeded;

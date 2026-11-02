@@ -267,40 +267,60 @@ namespace Group3.EgressExporter
                 PointInteraction.CheckElement(element, level, phase);
                 var doc = uiDoc.Document;
                 var settings = LocalSettings.Load(doc, level, phase);
-                // 非元件式樓梯（舊式草圖樓梯、樓梯族群）讀不到梯段，同一個按鈕改成請使用者點第一階
-                if (!(element is Stairs picked))
-                {
-                    var point = PointInteraction.Pick(uiDoc, level, "樓梯 " + element.Id.Value + " 不是元件式樓梯，外掛偵測不到第一階：請在平面圖點選第一階位置（Esc 取消）");
-                    var saved = PointInteraction.Capture(element, point, "user_picked_plan_point");
-                    RevitPositions.Validate(element, level, saved, true);
-                    if (!PointInteraction.Confirm("選擇直通梯", level.Name + "／" + phase.Name + "\n樓梯 " + element.Id.Value + "（非元件式）\n第一階 " +
-                        PointInteraction.Coordinates(point) + "\n儲存後這座樓梯會當直通樓梯計算。")) return Result.Cancelled;
-                    PointRules.SetStair(settings, new StairSetting { unique_id = element.UniqueId, is_direct_stair = true, endpoint_type = "first_step", picked_point = saved });
-                    LocalSettings.Save(doc, level, phase, settings);
-                    TaskDialog.Show("選擇直通梯", "已儲存樓梯 " + element.Id.Value + "。這一層只會用選定的樓梯計算；其他位置還有直通梯的話，請再按一次這個按鈕。");
-                    return Result.Succeeded;
-                }
-                var choices = SetStairEndpointCommand.OverlappingStairs(doc, picked, level, phase);
-                var rows = choices.Select(s => {
-                    var point = StairEndpoint.Detect(doc, s, level, out _, out _);
+                // 元件式樓梯列出同一位置重疊的上下兩座；非元件式樓梯（舊式草圖樓梯、樓梯族群）只列自己
+                var choices = element is Stairs picked
+                    ? SetStairEndpointCommand.OverlappingStairs(doc, picked, level, phase).Cast<Element>().ToList()
+                    : new System.Collections.Generic.List<Element> { element };
+                var detected = choices.Select(s => s is Stairs st ? StairEndpoint.Detect(doc, st, level, out _, out _) : null).ToList();
+                var rows = choices.Select((s, i) => {
                     var saved = settings.stairs.FirstOrDefault(x => x != null && x.unique_id == s.UniqueId);
+                    var p = detected[i];
                     return new SelectStairsForm.Row { Label = SetStairEndpointCommand.Describe(s, level) + "｜" +
-                        (point == null ? "偵測不到第一階" : "第一階 " + PointInteraction.Coordinates(new XYZ(point.X, point.Y, level.ProjectElevation))),
-                        Detected = point != null, Checked = point != null && saved?.is_direct_stair != false };
+                        (p == null ? "偵測不到第一階，確定後請在平面圖點選" : "第一階 " + PointInteraction.Coordinates(new XYZ(p.X, p.Y, level.ProjectElevation))),
+                        Checked = saved?.is_direct_stair != false && (p != null || saved?.is_direct_stair == true || choices.Count == 1) };
                 }).ToList();
+                bool fireDoor;
+                var use = new bool[choices.Count];
                 using (var form = new SelectStairsForm(level.Name, phase.Name, rows))
                 {
                     if (form.ShowDialog(new WindowHandle(command.Application.MainWindowHandle)) != DialogResult.OK) return Result.Cancelled;
-                    for (int i = 0; i < choices.Count; i++)
+                    fireDoor = form.UseFireDoor;
+                    for (int i = 0; i < choices.Count; i++) use[i] = form.IsChecked(i);
+                }
+                // 法規第 93 條第 2 項：安全梯得計算至進入樓梯間的防火門。選這個時只要點那扇門，終點用門的插入點
+                FamilyInstance door = null;
+                if (fireDoor && use.Any(x => x))
+                {
+                    door = (FamilyInstance)PointInteraction.Select(uiDoc, false, false);
+                    PointInteraction.CheckElement(door, level, phase);
+                    if (!(door.Location is LocationPoint)) throw new ArgumentException("這扇門沒有插入點，不能當終點；請選安全梯的防火門。");
+                }
+                for (int i = 0; i < choices.Count; i++)
+                {
+                    var s = choices[i];
+                    if (!use[i]) { PointRules.SetStair(settings, new StairSetting { unique_id = s.UniqueId, is_direct_stair = false }); continue; }
+                    if (door != null)
                     {
-                        if (!rows[i].Detected) continue;
-                        PointRules.SetStair(settings, new StairSetting { unique_id = choices[i].UniqueId, is_direct_stair = form.IsChecked(i),
-                            endpoint_type = form.IsChecked(i) ? "first_step" : null });
+                        PointRules.SetStair(settings, new StairSetting { unique_id = s.UniqueId, is_direct_stair = true, endpoint_type = "fire_door", endpoint_unique_id = door.UniqueId });
+                        continue;
                     }
+                    if (detected[i] != null)
+                    {
+                        // 位置不存，每次擷取時從梯段路徑重新偵測
+                        PointRules.SetStair(settings, new StairSetting { unique_id = s.UniqueId, is_direct_stair = true, endpoint_type = "first_step" });
+                        continue;
+                    }
+                    var point = PointInteraction.Pick(uiDoc, level, SetStairEndpointCommand.Describe(s, level) + "：外掛偵測不到第一階，請在平面圖點選第一階位置（Esc 取消）");
+                    var saved = PointInteraction.Capture(s, point, "user_picked_plan_point");
+                    RevitPositions.Validate(s, level, saved, true);
+                    if (!PointInteraction.Confirm("選擇直通梯", level.Name + "／" + phase.Name + "\n樓梯 " + s.Id.Value + "\n第一階 " +
+                        PointInteraction.Coordinates(point) + "\n儲存後這座樓梯會當直通樓梯計算。")) return Result.Cancelled;
+                    PointRules.SetStair(settings, new StairSetting { unique_id = s.UniqueId, is_direct_stair = true, endpoint_type = "first_step", picked_point = saved });
                 }
                 LocalSettings.Save(doc, level, phase, settings);
                 int used = settings.stairs.Count(x => x != null && x.is_direct_stair == true);
-                TaskDialog.Show("選擇直通梯", "已儲存。這一層會用 " + used + " 座樓梯計算，沒選的不列入。\n其他位置還有直通梯要用的話，請再按一次這個按鈕。");
+                TaskDialog.Show("選擇直通梯", "已儲存。這一層會用 " + used + " 座樓梯計算，沒選的不列入。" +
+                    (door != null ? "\n終點：防火門 " + door.Id.Value : "") + "\n其他位置還有直通梯要用的話，請再按一次這個按鈕。");
                 return Result.Succeeded;
             }
             catch (Autodesk.Revit.Exceptions.OperationCanceledException) { return Result.Cancelled; }
@@ -309,24 +329,28 @@ namespace Group3.EgressExporter
     }
     internal sealed class SelectStairsForm : Form
     {
-        internal sealed class Row { internal string Label; internal bool Detected, Checked; }
+        internal sealed class Row { internal string Label; internal bool Checked; }
         readonly CheckedListBox list = new CheckedListBox { Dock = DockStyle.Fill, CheckOnClick = true };
+        readonly ComboBox endpoint = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
         internal bool IsChecked(int index) => list.GetItemChecked(index);
+        internal bool UseFireDoor => endpoint.SelectedIndex == 1;
         internal SelectStairsForm(string level, string phase, System.Collections.Generic.List<Row> rows)
         {
-            Text = "選擇直通梯"; Width = 760; Height = 320; StartPosition = FormStartPosition.CenterParent; AutoScaleMode = AutoScaleMode.Dpi;
-            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(18), ColumnCount = 1, RowCount = 3 };
-            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            Text = "選擇直通梯"; Width = 760; Height = 360; StartPosition = FormStartPosition.CenterParent; AutoScaleMode = AutoScaleMode.Dpi;
+            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(18), ColumnCount = 1, RowCount = 4 };
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             Controls.Add(layout);
-            layout.Controls.Add(new Label { AutoSize = true, Padding = new Padding(0, 0, 0, 10), Text = level + "／" + phase + "\n勾選要當直通樓梯使用的樓梯，第一階位置由外掛從梯段路徑偵測。" }, 0, 0);
+            layout.Controls.Add(new Label { AutoSize = true, Padding = new Padding(0, 0, 0, 10), Text = level + "／" + phase + "\n勾選要當直通樓梯使用的樓梯。第一階由外掛從梯段路徑偵測；偵測不到的，確定後請你點選。" }, 0, 0);
             foreach (var row in rows) list.Items.Add(row.Label, row.Checked);
-            // 偵測不到位置的樓梯不能勾，要用「手動指定樓梯終點」點選
-            list.ItemCheck += (s, e) => { if (!rows[e.Index].Detected) e.NewValue = CheckState.Unchecked; };
             layout.Controls.Add(list, 0, 1);
+            endpoint.Items.AddRange(new object[] { "終點：直通樓梯的第一階", "終點：安全梯，計算到進入樓梯間的防火門（確定後點選那扇門）" });
+            endpoint.SelectedIndex = 0;
+            layout.Controls.Add(endpoint, 0, 2);
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft };
             var ok = new Button { Text = "確定", DialogResult = DialogResult.OK };
             var cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel };
-            buttons.Controls.Add(ok); buttons.Controls.Add(cancel); layout.Controls.Add(buttons, 0, 2);
+            buttons.Controls.Add(ok); buttons.Controls.Add(cancel); layout.Controls.Add(buttons, 0, 3);
             AcceptButton = ok; CancelButton = cancel;
         }
     }
