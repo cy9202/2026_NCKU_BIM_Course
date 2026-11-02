@@ -33,11 +33,19 @@ assert.equal(judgeRoom(room, { turns: [] }, walkLimit({ use_group: "B-3" }), P, 
 assert.equal(judgeRoom({ is_habitable: false }, facts(1), walkLimit({ use_group: "B-3" }), P, []).status, "需人工確認");
 assert.equal(judge("B-3", 25, { fire_resistant: null }).status, "需人工確認");
 
+// 未填樓層數、未確認的樓梯、自動推得的第一階：都要留給人確認，不能直接判符合。
+assert.equal(judge("B-3", 10, { floor_number: null }).status, "需人工確認");
+assert.equal(judge("B-3", 10, {}, { ...facts(10), stair_confirmed: false, stair_name: "樓梯 A" }).status, "需人工確認");
+assert.equal(judge("B-3", 10, {}, { ...facts(10), stair_confirmed: true, endpoint_source: "auto:lowest_run_path_start" }).status, "需人工確認");
+assert.equal(judge("B-3", 10, {}, { ...facts(10), stair_confirmed: true, endpoint_source: "user_confirmed:x" }).status, "符合");
+assert.equal(judgeRoom({ is_habitable: false }, { missing: "房間沒有門" }, walkLimit({ use_group: "B-3" }), P, []).status, "需人工確認");
+assert.equal(judgeRoom({ is_habitable: null }, { missing: "房間沒有門" }, walkLimit({ use_group: "B-3" }), P, []).status, "模型資料不足");
+
 // 專案提示只提供改善提醒，不改變法規結論。
-assert.equal(judgeRoom(room, { ...facts(27), turns: [] }, walkLimit({ use_group: "B-3", fire_resistant: true }), P, []).status, "符合");
-assert.ok(judgeRoom(room, { ...facts(27), turns: [] }, walkLimit({ use_group: "B-3", fire_resistant: true }), P, []).hints.some((h) => h.id === "P-NEAR"));
-assert.equal(judgeRoom(room, facts(27), walkLimit({ use_group: "B-3", fire_resistant: true }), {}, []).status, "符合");
-const turnResult = judgeRoom(room, { ...facts(10), turns: [{ at: [5, 0], deflection_deg: 90 }] }, walkLimit({ use_group: "B-3", fire_resistant: true }), P, [{ name: "走廊 A", centerline: [[0, 0], [10, 0]], clear_width_m: 1.2 }]);
+assert.equal(judgeRoom(room, { ...facts(27), turns: [] }, walkLimit({ use_group: "B-3", fire_resistant: true, floor_number: 3 }), P, []).status, "符合");
+assert.ok(judgeRoom(room, { ...facts(27), turns: [] }, walkLimit({ use_group: "B-3", fire_resistant: true, floor_number: 3 }), P, []).hints.some((h) => h.id === "P-NEAR"));
+assert.equal(judgeRoom(room, facts(27), walkLimit({ use_group: "B-3", fire_resistant: true, floor_number: 3 }), {}, []).status, "符合");
+const turnResult = judgeRoom(room, { ...facts(10), turns: [{ at: [5, 0], deflection_deg: 90 }] }, walkLimit({ use_group: "B-3", fire_resistant: true, floor_number: 3 }), P, [{ name: "走廊 A", centerline: [[0, 0], [10, 0]], clear_width_m: 1.2 }]);
 assert.equal(turnResult.status, "符合");
 assert.ok(turnResult.hints.some((h) => h.id === "P-TURN"));
 

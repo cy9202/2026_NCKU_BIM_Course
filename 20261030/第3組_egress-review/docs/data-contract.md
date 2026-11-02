@@ -59,13 +59,21 @@
 
 **doors**：`element_id`、`unique_id`、`room_ids`（門兩側空間的 `element_id`；門外是大廳等通行空間時，一定要寫那個空間的編號，路線才會接進去）、`position`、`clear_width_m`（有效淨寬，沒標就 `null`）、`clear_width_source`（數值從哪個參數來）。
 
-**stairs**：`element_id`、`unique_id`、`name`、`footprint`、`entry_point`（計算終點）、`endpoint_type`（`"first_step"` 第一階／`"fire_door"` 安全梯防火門，§93 第 2 項）、`is_direct_stair`（是否確認為直通樓梯，未確認填 `null`）。
+**stairs**：`element_id`、`unique_id`、`name`、`footprint`、`entry_point`（計算終點）、`endpoint_type`（`"first_step"` 第一階／`"fire_door"` 安全梯防火門，§93 第 2 項）、`is_direct_stair`（是否確認為直通樓梯，未確認填 `null`）、`endpoint_source`（終點怎麼來的：`user_confirmed:<UniqueId>` 使用者指定，`auto:...` 外掛從梯段路徑自動推得）、`footprint_loops`（梯段、平台分別的輪廓，前端逐圈畫；多圈時 `footprint` 留空）、`run_paths`（梯段路徑，參考用）。
+
+`is_direct_stair` 是 `false` 才不列入計算；`null` 照樣算距離，但 C 會標 `需人工確認`。`endpoint_source` 是 `auto:` 開頭的也一樣標 `需人工確認`。
+
+**unresolved_stairs**（A 輸出）：推不出終點，或使用者沒選用的樓梯（後者 `is_direct_stair` 是 `false`），`entry_point` 是 `null`，欄位同 stairs。不列入計算，前端畫虛線。
+
+**樓梯終點的來源**（`endpoint_source`）：使用者用「選擇直通梯」勾選的是 `user_selected_direct:<偵測方式>`，`is_direct_stair` 是 `true`，位置每次擷取時從梯段路徑重新偵測；手動點選的是 `user_picked_plan_point`；還沒選定的是 `auto:<偵測方式>`。
+
+**房間分類的來源**（A 外掛）：先看設定檔；設定檔沒寫，就讀 Revit 房間「部門」參數：`居室` → `is_habitable: true`；`通行` → `is_circulation: true`、`is_habitable: false`；`非居室` → 兩個都 `false`。其他值不採用，寫進 warnings。
 
 **corridors**：`element_id`、`unique_id`、`name`、`centerline`、`clear_width_m`、`clear_width_source`（怎麼量的）、`rooms_both_sides`（兩側是否都有居室，§92 用）。
 
 **corridors 的中心線**可以是多點折線；走廊之間、走廊和大廳之間的端點相距 5 cm 內才算接上。
 
-**obstacles**（選填，沒有就當房內無障礙物）：柱子等固定障礙物。`element_id`、`unique_id`、`category`（例如 `"Structural Columns"`）、`footprint`（平面輪廓，照順序繞一圈）。
+**obstacles**（選填，沒有就當房內無障礙物）：柱子等固定障礙物，也包含房間內圈（`category` 是 `"room_inner_boundary"`，`element_id` 是房間）。`element_id`、`unique_id`、`category`（例如 `"Structural Columns"`）、`footprint`（平面輪廓，照順序繞一圈）。
 
 **warnings**：擷取時發現的問題，每筆有 `element_id`、`code`、`message`。例如 `ROOM_NOT_ENCLOSED`、`DOOR_NO_CLEAR_WIDTH`。
 
@@ -105,6 +113,7 @@
 | `facts.indoor_m` / `corridor_m` / `distance_m` | B | 室內段、走廊段、總步行距離（兩位小數，顯示用） |
 | `facts.distance_exact_m` | B | 未四捨五入的總距離（判定用） |
 | `facts.endpoint_type` / `stair_id` | B | 算到哪座樓梯、算到第一階或防火門 |
+| `facts.stair_confirmed` / `endpoint_source` | B | 算到的樓梯是否已確認為直通樓梯、終點來源（`auto:` 開頭＝自動推得）；C 用來判斷要不要標需人工確認 |
 | `facts.door_id` | B | 從哪扇門出去 |
 | `facts.candidates` | B | 每座候選樓梯的距離、門（`door_id`）、完整路徑（`path`）；走不到的填 `null` |
 | `facts.notes` | B | 算得出來但有略過的東西（找不到的門、未確認的樓梯、走不到的樓梯），都只會讓距離偏長 |
@@ -117,8 +126,8 @@
 
 ## 判定順序（C 照這個寫）
 
-1. 房間邊界沒封閉、找不到門、沒有已確認的直通樓梯 → `模型資料不足`。
-2. 沒選使用類組、是否居室未確認、防火構造未確認等 → `需人工確認`。距離照算，但不下結論。
+1. 房間邊界沒封閉、找不到門、沒有任何有終點的樓梯 → `模型資料不足`。
+2. 沒選使用類組、沒填樓層數、是否居室未確認、防火構造未確認、樓梯未確認為直通樓梯、樓梯終點是自動推得等 → `需人工確認`。距離照算，但不下結論。
 3. 以上都沒有 → 距離 ≤ 上限為 `符合`，否則為 `不符合`。
 4. 另外檢查專案保守值，觸發的寫進 `hints`，不影響 `status`。
 

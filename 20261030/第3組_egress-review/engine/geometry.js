@@ -101,27 +101,75 @@
   // 門的另一側是通行空間 → 門直接接進那個空間；否則垂直接到最近的走廊中心線。樓梯計算終點落在通行空間裡也一樣。
   function walkNetwork(corridors, spaces, doors, stairs, obstacles) {
     const ends = [
-      ...doors.map((d) => ({ p: d.position, sp: spaces.find((s) => (d.room_ids || []).includes(s.element_id)) })),
-      ...stairs.map((st) => ({ p: st.entry_point, sp: spaces.find((s) => inPoly(st.entry_point, s.boundary) >= 0) })),
+      ...doors.map((d) => ({ p: d.position, sps: spaces.filter((s) => (d.room_ids || []).includes(s.element_id)) })),
+      ...stairs.map((st) => ({ p: st.entry_point, sps: spaces.filter((s) => inPoly(st.entry_point, s.boundary) >= 0) })),
     ];
-    const viaCorridor = ends.filter((e) => !e.sp);
+    const viaCorridor = ends.filter((e) => !e.sps.length);
     const net = corridorNetwork(corridors, viaCorridor.map((e) => e.p), spaces.map((s) => s.boundary));
-    const node = ends.map((e) => (e.sp ? net.nodeOf(e.p) : net.foot[viaCorridor.indexOf(e)]));
+    const node = ends.map((e) => (e.sps.length ? net.nodeOf(e.p) : net.foot[viaCorridor.indexOf(e)]));
     const link = (u, v) => {
       if (u === v) return;
       const w = dist(net.nodes[u], net.nodes[v]);
       (net.adj[u] = net.adj[u] || []).push([v, w]);
       (net.adj[v] = net.adj[v] || []).push([u, w]);
     };
+    // 先把所有節點放好，再連邊：後面空間新增的點如果也在前面的空間裡，才不會漏連
+    const gates = [];
     for (const s of spaces) {
       s.boundary.forEach(net.nodeOf);
       obstacles.flat().filter((p) => inPoly(p, s.boundary) >= 0).forEach(net.nodeOf);
+      // 門的座標常在牆心、落在房間外框外：門先走到這個空間外框上最近的點，再進空間
+      doors.forEach((d, i) => {
+        if (!(d.room_ids || []).includes(s.element_id) || node[i] == null) return;
+        const g = gateOn(d.position, s.boundary);
+        if (!g) return;
+        let k = net.nodeOf(g);
+        if (inPoly(net.nodes[k], s.boundary) < 0) { net.nodes.push(g); k = net.nodes.length - 1; }
+        gates.push([node[i], k]);
+      });
+    }
+    gates.forEach(([u, v]) => link(u, v));
+    for (const s of spaces) {
       // 空間裡（含邊上）的所有節點：空間角點、柱角、門、樓梯、走廊中心線穿進來的點
       const ids = net.nodes.map((p, i) => (inPoly(p, s.boundary) >= 0 ? i : -1)).filter((i) => i >= 0);
       for (let a = 0; a < ids.length; a++) for (let b = a + 1; b < ids.length; b++)
         if (canWalk(net.nodes[ids[a]], net.nodes[ids[b]], s.boundary, obstacles)) link(ids[a], ids[b]);
     }
     return { nodes: net.nodes, adj: net.adj, doorNode: node.slice(0, doors.length), stairNode: node.slice(doors.length) };
+  }
+
+  // 門的座標在牆裡時，取房間外框上最近的點當進出口；已在房內或邊上就用原座標。太遠回傳 null（不是這間房的門）
+  const DOOR_WALL_MAX = 0.6; // 牆心到牆面的容許距離，自訂假設，不是法規數字
+  function gateOn(p, poly) {
+    if (inPoly(p, poly) >= 0) return p;
+    let q = null;
+    poly.forEach((a, i) => {
+      const c = closestOnSeg(p, a, poly[(i + 1) % poly.length]);
+      if (!q || dist(p, c) < dist(p, q)) q = c;
+    });
+    return dist(p, q) <= DOOR_WALL_MAX ? q : null;
+  }
+
+  // 這間房走得到的空間：所有通行空間，加上從這間房經由門一路連到的居室（例如臥室出去先經過客廳）
+  // 碰到通行空間就不再往外找，路線才不會穿過別戶的居室；標成非居室、未確認的房間不當路線
+  function walkableSpaces(room, snapshot) {
+    const rooms = snapshot.rooms || [];
+    const ok = (r) => r.boundary_closed && Array.isArray(r.boundary) && r.boundary.length >= 3 && r.element_id !== room.element_id;
+    const out = new Set(rooms.filter((r) => r.is_circulation === true && ok(r)));
+    const seen = new Set([room.element_id]), queue = [room.element_id];
+    while (queue.length) {
+      const cur = queue.shift();
+      for (const d of snapshot.doors || []) {
+        if (!(d.room_ids || []).includes(cur)) continue;
+        for (const id of d.room_ids) {
+          if (seen.has(id)) continue;
+          seen.add(id);
+          const r = rooms.find((x) => x.element_id === id);
+          if (r && r.is_habitable === true && r.is_circulation !== true && ok(r)) { out.add(r); queue.push(id); }
+        }
+      }
+    }
+    return rooms.filter((r) => out.has(r));
   }
 
   // 網路上兩節點間最短的一串點（Dijkstra）；走不到回傳 null
@@ -318,51 +366,93 @@
     return `門 ${label(door)} 走不到樓梯：最可能的斷口在 ${at(gap.a)} 和 ${at(gap.b)} 之間，相距 ${r2(gap.d)} m（超過 ${SNAP * 100} cm 就當作沒接上）`;
   }
 
+  // 房間外框和通行空間外框重疊（共線、相距 5 cm 內）且長 0.3 m 以上的邊段 → 開口，位置取重疊段中點
+  // 0.3 m 只是排除碰到角的小段，是自訂假設，不是法規數字
+  const OPENING_MIN = 0.3;
+  function openings(room, rooms) {
+    const out = [], poly = room.boundary;
+    for (const sp of rooms) {
+      if (sp.element_id === room.element_id || sp.is_circulation !== true || !sp.boundary_closed || !Array.isArray(sp.boundary) || sp.boundary.length < 3) continue;
+      poly.forEach((a, i) => {
+        const b = poly[(i + 1) % poly.length], L = dist(a, b);
+        if (L < OPENING_MIN) return;
+        const t = (p) => ((p[0] - a[0]) * (b[0] - a[0]) + (p[1] - a[1]) * (b[1] - a[1])) / (L * L);
+        sp.boundary.forEach((c, j) => {
+          const d = sp.boundary[(j + 1) % sp.boundary.length];
+          if (dist(c, closestOnLine(c, a, b)) > SNAP || dist(d, closestOnLine(d, a, b)) > SNAP) return;
+          const lo = Math.max(0, Math.min(t(c), t(d))), hi = Math.min(1, Math.max(t(c), t(d)));
+          if ((hi - lo) * L < OPENING_MIN) return;
+          const m = (lo + hi) / 2;
+          out.push({ element_id: `opening:${room.element_id}-${sp.element_id}-${out.length}`, position: [a[0] + (b[0] - a[0]) * m, a[1] + (b[1] - a[1]) * m],
+            room_ids: [room.element_id, sp.element_id], is_opening: true, space_name: label(sp), width_m: (hi - lo) * L });
+        });
+      });
+    }
+    return out;
+  }
+  // 點 p 在直線 ab（不限線段）上最近的點
+  function closestOnLine(p, a, b) {
+    const L2 = (b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2, k = ((p[0] - a[0]) * (b[0] - a[0]) + (p[1] - a[1]) * (b[1] - a[1])) / L2;
+    return [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k];
+  }
+
   function measure(room, snapshot) {
     const notes = [];
     if (!room.boundary_closed) return { missing: "房間邊界未封閉，無法決定居室範圍" };
     if (!Array.isArray(room.boundary) || room.boundary.filter(isPt).length < 3) return { missing: "房間外框少於 3 個有效的點" };
-    if (!Array.isArray(room.door_ids) || !room.door_ids.length) return { missing: "房間沒有門（door_ids 是空的）" };
     const doors = [];
-    for (const id of room.door_ids) {
+    for (const id of room.door_ids || []) {
       const d = (snapshot.doors || []).find((x) => x.element_id === id);
       if (!d) notes.push(`門 ${id} 在快照裡找不到，已略過`);
       else if (!isPt(d.position)) notes.push(`門 ${id} 沒有座標，已略過`);
       else doors.push(d);
     }
-    if (!doors.length) return { missing: `找不到房間的門（${notes.join("；")}）` };
+    // 沒有門、但和通行空間共用一段外框（Revit 用房間分隔線分開、中間沒有牆）→ 當成開口
+    for (const o of openings(room, snapshot.rooms || [])) {
+      doors.push(o);
+      notes.push(`和 ${o.space_name} 共用 ${r2(o.width_m)} m 的邊（沒有門的開口），取中點當出入口`);
+    }
+    if (!doors.length) return { missing: room.door_ids && room.door_ids.length ? `找不到房間的門（${notes.join("；")}）` : "房間沒有門（door_ids 是空的），也沒有和通行空間相通的開口" };
     const stairs = [];
+    // is_direct_stair 是 false 才排除；null（未確認）照樣算距離，結果由 C 標需人工確認
     for (const st of snapshot.stairs || []) {
-      if (st.is_direct_stair !== true) notes.push(`${label(st)} 還沒確認是直通樓梯（is_direct_stair 是 ${st.is_direct_stair}），沒有列入候選`);
+      if (st.is_direct_stair === false) notes.push(`${label(st)} 已標示不是直通樓梯，沒有列入候選`);
       else if (!isPt(st.entry_point)) notes.push(`${label(st)} 沒有計算終點座標，沒有列入候選`);
       else stairs.push(st);
     }
     if (!stairs.length) {
       const all = snapshot.stairs || [];
-      const unconfirmed = all.filter((st) => st.is_direct_stair !== true).map(label);
-      return { missing: !all.length ? "快照裡沒有樓梯" : unconfirmed.length ? `沒有已確認的直通樓梯（${unconfirmed.join("、")} 的 is_direct_stair 不是 true）` : "直通樓梯都沒有計算終點座標" };
+      return { missing: !all.length ? "快照裡沒有樓梯（終點未定的樓梯在 unresolved_stairs，不列入計算）" : all.every((st) => st.is_direct_stair === false) ? "樓梯都已標示不是直通樓梯" : "樓梯都沒有計算終點座標" };
     }
 
     // 柱子等固定障礙物：snapshot.obstacles[].footprint，沒有這個欄位就當房內沒有障礙物
     const obstacles = (snapshot.obstacles || []).map((o) => o.footprint).filter((f) => Array.isArray(f) && f.length >= 3);
     const corridors = (snapshot.corridors || []).filter((c) => Array.isArray(c.centerline) && c.centerline.length >= 2);
-    const spaces = snapshot.rooms.filter((r) => r.is_circulation === true && r.boundary_closed && Array.isArray(r.boundary) && r.boundary.length >= 3 && r.element_id !== room.element_id);
+    const spaces = walkableSpaces(room, snapshot);
     if (!corridors.length && !spaces.length) return { missing: "沒有走廊中心線或通行空間，無法排路線" };
-    const net = walkNetwork(corridors, spaces, doors, stairs, obstacles);
+    // 這間房的門排前面；其他門只有連接兩個可走空間的才要接進來（例如客廳通走廊的門）
+    const spaceIds = new Set(spaces.map((s) => s.element_id));
+    const passDoors = (snapshot.doors || []).filter((d) => isPt(d.position) && !doors.includes(d) && (d.room_ids || []).filter((id) => spaceIds.has(id)).length >= 2);
+    const net = walkNetwork(corridors, spaces, [...doors, ...passDoors], stairs, obstacles);
 
+    // 門在牆心時，房內路線先走到外框上的進出口，再接到門的座標
+    const gates = doors.map((d) => gateOn(d.position, room.boundary) || d.position);
     const exitCost = doors.map((d, di) => Math.min(...stairs.map((s, si) => {
-      const path = routeTo([d.position], s, net, net.doorNode[di], net.stairNode[si]);
+      const path = routeTo([gates[di], d.position], s, net, net.doorNode[di], net.stairNode[si]);
       return path ? plen(path) : Infinity;
     })));
     if (exitCost.every((c) => c === Infinity))
       return { missing: doors.map((d, di) => gapReport(net, corridors, d, net.doorNode[di], net.stairNode)).join("；") };
     doors.forEach((d, di) => { if (exitCost[di] === Infinity) notes.push(gapReport(net, corridors, d, net.doorNode[di], net.stairNode) + "，這扇門不列入計算"); });
-    const fp = farthestPoint(room.boundary, obstacles, doors.map((d) => d.position), exitCost);
+    const fp = farthestPoint(room.boundary, obstacles, gates, exitCost);
     if (!fp) return { missing: "房間內找不到可站立的最遠點候選（內縮 0.5 m 後的點都落在房外或柱子裡）" };
     if (fp.v === Infinity) return { missing: `房內 ${pt(fp.p)} 附近被障礙物圍住，走不到任何一扇門` };
 
     const far = fp.p, pi = 0;
-    const insides = [doors.map((d) => indoorPath(far, d.position, room.boundary, obstacles))];
+    const insides = [doors.map((d, di) => {
+      const path = indoorPath(far, gates[di], room.boundary, obstacles);
+      return path && [...path, d.position];
+    })];
     const route = (pi, di, si) => {
       const path = routeTo(insides[pi][di], stairs[si], net, net.doorNode[di], net.stairNode[si]);
       return { p: far, inside: insides[pi][di], door: doors[di], s: stairs[si], path, d: path ? plen(path) : Infinity };
@@ -375,9 +465,16 @@
       return { stair_id: s.element_id, stair_name: s.name, door_id: r.path ? r.door.element_id : null, distance_m: r.path ? r2(r.d) : null, path: r.path };
     });
     const indoor = plen(best.inside);
+    // 路線穿過別的居室時寫出來，讓人工覆核看得到
+    const mid = netPath(net, net.doorNode[doors.indexOf(best.door)], net.stairNode[stairs.indexOf(best.s)]) || [];
+    const through = spaces.filter((s) => s.is_circulation !== true && passDoors.concat(doors).some((d) => (d.room_ids || []).includes(s.element_id) && mid.some((p) => dist(p, d.position) < SNAP)));
+    if (through.length) notes.push(`路線穿過 ${through.map(label).join("、")}（居室），請確認這條路線實際可通行`);
+    if (best.s.is_direct_stair !== true) notes.push(`算到的 ${label(best.s)} 還沒確認是直通樓梯`);
+    if (String(best.s.endpoint_source || "").startsWith("auto:")) notes.push(`${label(best.s)} 的第一階位置是外掛從梯段路徑自動推的`);
     return {
       door_id: best.door.element_id,
       far_point: far, path: best.path, stair_id: best.s.element_id, stair_name: best.s.name,
+      stair_confirmed: best.s.is_direct_stair === true, endpoint_source: best.s.endpoint_source || null,
       endpoint_type: best.s.endpoint_type, indoor_m: r2(indoor), corridor_m: r2(best.d - indoor), distance_m: r2(best.d), distance_exact_m: best.d,
       turns: turns(best.path), candidates, notes,
     };

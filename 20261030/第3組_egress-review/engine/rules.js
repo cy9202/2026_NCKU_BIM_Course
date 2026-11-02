@@ -19,6 +19,7 @@
       if (settings.tv_studio_with_audience == null) pending.push("C 類：是否為有現場觀眾之電視攝影場");
       limit = settings.tv_studio_with_audience ? 30 : 70;
     } else { limit = 50; rules.push("R93-2-2"); }
+    if (settings.floor_number == null) pending.push("尚未填樓層數（第 15 層以上的上限不同）");
     if (settings.floor_number >= 15) {
       rules.push("R93-2-3");
       if (limit === 30) limit = 20;
@@ -55,6 +56,12 @@
     // 判定用未四捨五入的距離（整合規則第 12 條）
     const d = facts.distance_exact_m != null ? facts.distance_exact_m : facts.distance_m;
     const res = { status: null, reasons: [], legal: null, hints: [] };
+    // 已標示非居室的房間不在 §93 檢討範圍，先處理，不因為算不出距離而列資料不足
+    if (room.is_habitable === false && (facts.missing || !Number.isFinite(d))) {
+      res.status = "需人工確認";
+      res.reasons.push("模型標示為非居室，不列入 §93 居室檢討；請確認分類是否正確");
+      return res;
+    }
     if (facts.missing) { res.status = "模型資料不足"; res.reasons.push(facts.missing); return res; }
     if (!Number.isFinite(d) || d < 0) { res.status = "模型資料不足"; res.reasons.push("缺少有效的步行距離計算結果"); return res; }
     if (room.is_habitable === false) {
@@ -63,6 +70,9 @@
       return res;
     }
     if (room.is_habitable == null) res.reasons.push("是否為居室待確認（§93 只檢討居室）");
+    // B 會把未確認的樓梯也算進來，這裡一律留給人確認，不下符合／不符合
+    if (facts.stair_confirmed === false) res.reasons.push(`計算用的樓梯（${facts.stair_name || facts.stair_id}）尚未確認為直通樓梯`);
+    if (String(facts.endpoint_source || "").startsWith("auto:")) res.reasons.push("樓梯第一階位置由梯段路徑自動推得，尚未人工確認");
     if (Array.isArray(lim.pending)) res.reasons.push(...lim.pending);
     if (lim.limit != null)
       res.legal = { rules: lim.rules, limit_m: lim.limit, diff_m: G.r2(d - lim.limit), pass: d <= lim.limit };
