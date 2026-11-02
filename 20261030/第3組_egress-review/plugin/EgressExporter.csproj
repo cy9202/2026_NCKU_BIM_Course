@@ -16,12 +16,14 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="src/*.cs" />
+    <EmbeddedResource Include="../egress-review-standalone.html" LogicalName="report.html" />
     <Reference Include="RevitAPI"><HintPath>$(RevitDirectory)/RevitAPI.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="RevitAPIUI"><HintPath>$(RevitDirectory)/RevitAPIUI.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="System.Runtime.Serialization" Condition="'$(RevitVersion)' == '2024'" />
   </ItemGroup>
   <Target Name="ValidateRevit" BeforeTargets="ResolveReferences">
     <Error Condition="'$(RevitVersion)' != '2027' and '$(RevitVersion)' != '2024'" Text="Supported RevitVersion: 2027 or 2024." />
+    <Error Condition="!Exists('../egress-review-standalone.html')" Text="Run: node build.js (in the project folder) to create egress-review-standalone.html first." />
     <Error Condition="!Exists('$(RevitDirectory)/RevitAPI.dll')" Text="Install Revit $(RevitVersion) or set RevitDirectory to its API assembly directory." />
   </Target>
 </Project>

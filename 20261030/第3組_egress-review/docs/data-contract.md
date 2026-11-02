@@ -63,7 +63,9 @@
 
 `is_direct_stair` 是 `false` 才不列入計算；`null` 照樣算距離，但 C 會標 `需人工確認`。`endpoint_source` 是 `auto:` 開頭的也一樣標 `需人工確認`。
 
-**unresolved_stairs**（A 輸出）：推不出終點的樓梯，`entry_point` 是 `null`，欄位同 stairs。不列入計算，前端畫虛線。
+**unresolved_stairs**（A 輸出）：推不出終點，或使用者沒選用的樓梯（後者 `is_direct_stair` 是 `false`），`entry_point` 是 `null`，欄位同 stairs。不列入計算，前端畫虛線。
+
+**樓梯終點的來源**（`endpoint_source`）：使用者用「選擇直通梯」勾選的是 `user_selected_direct:<偵測方式>`，`is_direct_stair` 是 `true`，位置每次擷取時從梯段路徑重新偵測；手動點選的是 `user_picked_plan_point`；還沒選定的是 `auto:<偵測方式>`。
 
 **房間分類的來源**（A 外掛）：先看設定檔；設定檔沒寫，就讀 Revit 房間「部門」參數：`居室` → `is_habitable: true`；`通行` → `is_circulation: true`、`is_habitable: false`；`非居室` → 兩個都 `false`。其他值不採用，寫進 warnings。
 
@@ -71,9 +73,9 @@
 
 **corridors 的中心線**可以是多點折線；走廊之間、走廊和大廳之間的端點相距 5 cm 內才算接上。
 
-**obstacles**（選填，沒有就當房內無障礙物）：柱子等固定障礙物。`element_id`、`unique_id`、`category`（例如 `"Structural Columns"`）、`footprint`（平面輪廓，照順序繞一圈）。
+**obstacles**（選填，沒有就當房內無障礙物）：柱子等固定障礙物，也包含房間內圈（`category` 是 `"room_inner_boundary"`，`element_id` 是房間）。`element_id`、`unique_id`、`category`（例如 `"Structural Columns"`）、`footprint`（平面輪廓，照順序繞一圈）。
 
-**warnings**：擷取時發現的問題，每筆有 `element_id`、`code`、`message`。例如 `ROOM_NOT_ENCLOSED`、`DOOR_NO_CLEAR_WIDTH`。
+**warnings**：擷取時發現的問題，每筆有 `element_id`、`code`、`message`。例如 `ROOM_NOT_ENCLOSED`、`DOOR_NO_CLEAR_WIDTH`。同一問題合併成一筆時（目前是 `DOOR_NO_CLEAR_WIDTH`），`element_id` 是 `null`，元件列在 `element_ids`。
 
 ## 2 專案設定（使用者手選，程式不可從房間名稱推測）
 

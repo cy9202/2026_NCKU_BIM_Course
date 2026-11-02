@@ -20,6 +20,21 @@ namespace Group3.EgressExporter
                 result.RemoveAt(result.Count - 1);
             return result;
         }
+        // Revit 把房間內的柱子、孔洞回傳成額外的邊界圈。面積最大的是外框，其他圈完全在外框內才算內圈；
+        // 有圈落在外框外（不相連的區域）回傳 null，不猜測路線。
+        public static List<double[]> OuterLoop(List<List<double[]>> loops, out List<List<double[]>> holes)
+        {
+            holes = new List<List<double[]>>();
+            if (loops == null || loops.Count == 0) return null;
+            var outer = loops.OrderByDescending(Area).First();
+            foreach (var loop in loops)
+            {
+                if (ReferenceEquals(loop, outer)) continue;
+                if (loop.Any(p => !Contains(outer, p))) return null;
+                holes.Add(loop);
+            }
+            return outer;
+        }
         static double Cross(double ax, double ay, double bx, double by) => ax * by - ay * bx;
         public static bool Contains(List<double[]> ring, double[] p)
         {

@@ -146,7 +146,7 @@ td.n, th.n { text-align: right; font-family: var(--f-mono); font-variant-numeric
 
 <div class="wrap">
   <header>
-    <h1>逃生動線檢討台 <span class="tag">示意資料・規則包未核定</span></h1>
+    <h1>逃生動線檢討台 <span class="tag" data-demo-tag>示意資料・規則包未核定</span></h1>
     <div class="meta" id="meta"></div>
   </header>
 
@@ -214,7 +214,7 @@ td.n, th.n { text-align: right; font-family: var(--f-mono); font-variant-numeric
   </section>
 
   <div class="foot">
-    <p>平面、尺寸與 ElementId 都是示意資料。步行距離：房內最遠點（外框內縮 0.5 m）直線到門、垂直接走廊中心線、沿中心線到樓梯計算終點；第一階段假設房內無固定障礙物。</p>
+    <p><span data-demo-note>平面、尺寸與 ElementId 都是示意資料。</span>步行距離：房內最遠點（外框內縮 0.5 m）直線到門、垂直接走廊中心線、沿中心線到樓梯計算終點；第一階段假設房內無固定障礙物。</p>
     <p>法規依全國法規資料庫《建築技術規則建築設計施工編》第 92、93 條（2026-10-19 查閱），規則包為草案，須經建築師／法規顧問核定後才能作為正式判定依據。紫色「設計提示」是專案保守值，不是法定門檻。</p>
   </div>
 </div>
@@ -292,18 +292,31 @@ function snapshotProblems(s) {
   return p;
 }
 $("importBtn").addEventListener("click", () => $("importFile").click());
+// 真實模型不沿用範例設定：使用類組、樓層數、防火構造都留空，由使用者選定後再按「執行檢討」
+const BLANK_SETTINGS = { use_group: null, use_group_set_by: null, floor_number: null, below_ground: false, fire_resistant: null, tv_studio_with_audience: null, corridor_serves_classroom: null, duplex_housing: false };
+function importSnapshot(s, name, preset) {
+  const bad = snapshotProblems(s);
+  if (bad.length) throw new Error(bad.join("；"));
+  state.sel = null;
+  state.settings = { ...BLANK_SETTINGS, ...(preset || {}) };
+  writeSettings(state.settings);
+  // 範例批次和真實模型無關，不留在批次紀錄裡
+  state.batches = state.batches.filter((x) => x !== BATCH0);
+  const tag = document.querySelector("[data-demo-tag]");
+  if (tag) tag.textContent = "規則包未核定";
+  const note = document.querySelector("[data-demo-note]");
+  if (note) note.textContent = "";
+  const b = addBatch(s, readSettings());
+  SNAPSHOT = s;
+  const scope = preset ? `已依 Revit 擷取時的設定計算：${preset.use_group}、第 ${preset.floor_number} 層、防火構造${preset.fire_resistant == null ? "未確認" : preset.fire_resistant ? "是" : "否"}。可在上方修改後重新執行。` : "請選使用類組、樓層數、防火構造，再按「執行檢討」。";
+  $("importMsg").textContent = `已載入 ${name}：${b.inputs.model}／${lvl(b)}，${s.rooms.length} 間房、${s.doors.length} 扇門、${s.stairs.length} 座樓梯、${s.corridors.length} 條走廊、${s.warnings.length} 筆擷取提醒。${scope}`;
+}
 $("importFile").addEventListener("change", async (e) => {
   const f = e.target.files[0];
   e.target.value = "";
   if (!f) return;
   try {
-    const s = JSON.parse((await f.text()).replace(/^﻿/, ""));
-    const bad = snapshotProblems(s);
-    if (bad.length) throw new Error(bad.join("；"));
-    state.sel = null;
-    const b = addBatch(s, readSettings());
-    SNAPSHOT = s;
-    $("importMsg").textContent = `已匯入 ${f.name}：${b.inputs.model}／${lvl(b)}，${s.rooms.length} 間房、${s.doors.length} 扇門、${s.stairs.length} 座樓梯、${s.corridors.length} 條走廊、${s.warnings.length} 筆擷取提醒，已建立新批次 ${b.batch_id}`;
+    importSnapshot(JSON.parse((await f.text()).replace(/^﻿/, "")), f.name);
   } catch (err) {
     $("importMsg").textContent = `無法匯入 ${f.name}：${err.message}`;
   }
@@ -311,9 +324,15 @@ $("importFile").addEventListener("change", async (e) => {
 $("lock").addEventListener("click", () => { batch().locked = true; render(); });
 
 // ---------- 畫面 ----------
+// 第 93 條只檢討居室：使用者標成非居室、通行的房間不列入卡片和統計（批次資料仍保留）
+function reviewed(b) {
+  const sp = SNAP_OF.get(b) || SNAPSHOT;
+  const excluded = new Set(((sp && sp.rooms) || []).filter((r) => r.is_habitable === false).map((r) => r.element_id));
+  return b.rooms.filter((r) => !excluded.has(r.element_id));
+}
 function counts(b) {
   const c = { "符合": 0, "不符合": 0, "需人工確認": 0, "模型資料不足": 0 };
-  b.rooms.forEach((r) => c[r.status]++);
+  reviewed(b).forEach((r) => c[r.status]++);
   return c;
 }
 function renderMeta() {
@@ -326,8 +345,8 @@ function renderMeta() {
   $("lock").textContent = b.locked ? "此批次已鎖定" : "鎖定此批次";
 }
 function renderKpis() {
-  const b = batch(), c = counts(b), n = b.rooms.length;
-  const hints = b.rooms.filter((r) => r.hints.length).length;
+  const b = batch(), c = counts(b), n = reviewed(b).length;
+  const hints = reviewed(b).filter((r) => r.hints.length).length;
   const items = [...Object.keys(c).map((k) => [k, c[k], ST[k].c]), ["設計提示", hints, "s-hint"]];
   $("kpis").innerHTML = items.map(([k, v, cls]) => `<button class="kpi" data-k="${k}" aria-pressed="${state.filter === k}">
     <span class="n">${v}<span class="muted" style="font-size:.8rem"> / ${n}</span></span>
@@ -341,8 +360,10 @@ function placed(r) {
 }
 function renderRooms() {
   const b = batch();
-  const hidden = b.rooms.filter((r) => !placed(r)).length;
-  const list = b.rooms.filter(placed).filter((r) => !state.filter || (state.filter === "設計提示" ? r.hints.length : r.status === state.filter));
+  const inReview = reviewed(b);
+  const hidden = inReview.filter((r) => !placed(r)).length;
+  const others = b.rooms.length - inReview.length;
+  const list = inReview.filter(placed).filter((r) => !state.filter || (state.filter === "設計提示" ? r.hints.length : r.status === state.filter));
   $("rooms").innerHTML = list.map((r) => {
     const d = r.facts ? `${f1(r.facts.distance_m)} m / ${r.legal ? r.legal.limit_m + " m" : "上限未定"}` : "無法計算";
     const sharp = r.hints.filter((h) => h.id === "P-TURN").length;
@@ -354,6 +375,7 @@ function renderRooms() {
     </button>`;
   }).join("") || `<p class="muted">沒有符合篩選條件的居室。</p>`;
   if (hidden) $("rooms").innerHTML += `<p class="muted" style="grid-column:1/-1">另有 ${hidden} 間房沒有封閉外框（未放置或未封閉），沒有列出卡片；問題列在下方「模型修正清單」。</p>`;
+  if (others) $("rooms").innerHTML += `<p class="muted" style="grid-column:1/-1">另有 ${others} 間標成非居室或通行的房間（例如廁所、走廊）依第 93 條不列入檢討，平面圖上仍會顯示。</p>`;
   $("rooms").querySelectorAll(".rc").forEach((el) => el.addEventListener("click", () => { state.sel = el.dataset.id; render(); }));
 }
 
@@ -554,7 +576,7 @@ function renderTables() {
 }
 function render() {
   // 換了模型快照，原本選的房間可能不存在，改選第一間
-  const rs = batch().rooms.filter(placed);
+  const rs = reviewed(batch()).filter(placed);
   if (!rs.some((r) => r.element_id === state.sel)) state.sel = rs.length ? rs[0].element_id : null;
   $("roomsTitle").textContent = `${lvl(batch())} 居室 ・ 點卡片查看詳細檢討`;
   renderMeta(); renderKpis(); renderRooms(); renderPlan(); renderDetail(); renderTables();
@@ -566,4 +588,11 @@ $("viewHint").addEventListener("click", () => { state.view = "hint"; render(); }
 writeSettings(SETTINGS0);
 renderLayers();
 render();
+// A 外掛擷取後產生的網頁會把快照放在這裡，打開就載入；直接開網頁時是 null，顯示範例
+const AUTO_SNAPSHOT = /*G3_IMPORT*/null;
+const AUTO_SETTINGS = /*G3_SETTINGS*/null;
+if (AUTO_SNAPSHOT) {
+  try { importSnapshot(AUTO_SNAPSHOT, "Revit 擷取的模型", AUTO_SETTINGS); render(); }
+  catch (err) { $("importMsg").textContent = `無法載入模型快照：${err.message}`; }
+}
 </script>

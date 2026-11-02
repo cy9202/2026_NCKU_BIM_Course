@@ -86,12 +86,75 @@ namespace Group3.EgressExporter
     {
         [DataMember] public string element_id, code, message;
         [DataMember] public string severity = "warning";
+        // 同一問題合併成一筆時，列出所有相關元件；element_id 留 null。
+        [DataMember(EmitDefaultValue = false)] public List<string> element_ids;
+    }
+    // 把模型快照放進檢討網頁：產出的 html 不用網路、不用另外匯入，打開就是這個模型
+    public static class ReportBuilder
+    {
+        public static string Inject(string template, string snapshotJson, string settingsJson)
+        {
+            // 跳脫 < ，模型裡的文字才不會提前結束 script
+            return Fill(Fill(template, "/*G3_IMPORT*/null", snapshotJson.TrimStart('﻿').Replace("<", "\\u003c")), "/*G3_SETTINGS*/null", settingsJson);
+        }
+        static string Fill(string template, string marker, string value)
+        {
+            int at = template.IndexOf(marker, StringComparison.Ordinal);
+            if (at < 0 || template.IndexOf(marker, at + 1, StringComparison.Ordinal) >= 0) throw new ArgumentException("檢討網頁範本不正確，請重新建置外掛。");
+            return template.Substring(0, at) + value + template.Substring(at + marker.Length);
+        }
+        // 使用者在擷取視窗選的專案設定，欄位對應 docs/data-contract.md 的專案設定
+        public static string SettingsJson(string useGroup, int floorNumber, bool? fireResistant)
+        {
+            if (Array.IndexOf(UseGroups, useGroup) < 0) throw new ArgumentException("使用類組不正確：" + useGroup);
+            return "{\"use_group\":\"" + useGroup + "\",\"use_group_set_by\":\"Revit 擷取視窗\",\"floor_number\":" +
+                floorNumber.ToString(System.Globalization.CultureInfo.InvariantCulture) + ",\"below_ground\":" + (floorNumber < 0 ? "true" : "false") +
+                ",\"fire_resistant\":" + (fireResistant.HasValue ? (fireResistant.Value ? "true" : "false") : "null") +
+                ",\"tv_studio_with_audience\":null,\"corridor_serves_classroom\":null,\"duplex_housing\":false}";
+        }
+        public static readonly string[] UseGroups = { "A-1","A-2","B-1","B-2","B-3","B-4","C-1","C-2","D-1","D-2","D-3","D-4","D-5","E","F-1","F-2","F-3","F-4","G-1","G-2","G-3","H-1","H-2","I" };
+    }
+    public sealed class WarningGroup
+    {
+        public string code, message, severity;
+        public int count;
+        public List<string> element_ids = new List<string>();
+    }
+    // 缺漏清單的顯示方式：同一種問題只佔一列，要處理的排在提醒前面。JSON 內容不變。
+    public static class WarningSummary
+    {
+        const string VariesNote = "（各件內容略有不同，詳見快照 warnings）";
+        public static List<WarningGroup> Group(IEnumerable<WarningData> warnings)
+        {
+            var groups = new List<WarningGroup>();
+            foreach (var w in warnings)
+            {
+                var group = groups.Find(g => g.code == w.code);
+                if (group == null) { group = new WarningGroup { code = w.code, message = w.message, severity = w.severity }; groups.Add(group); }
+                if (w.severity == "error") group.severity = "error";
+                if (group.message != w.message && !group.message.EndsWith(VariesNote, StringComparison.Ordinal)) group.message += VariesNote;
+                var ids = new List<string>();
+                if (w.element_ids != null) ids.AddRange(w.element_ids);
+                if (w.element_id != null) ids.Add(w.element_id);
+                foreach (var id in ids) if (!group.element_ids.Contains(id)) group.element_ids.Add(id);
+                group.count = Math.Max(group.count + (w.element_ids == null ? 1 : 0), group.element_ids.Count);
+            }
+            groups.Sort((a, b) => {
+                int rank = (a.severity == "error" ? 0 : 1).CompareTo(b.severity == "error" ? 0 : 1);
+                return rank != 0 ? rank : string.CompareOrdinal(a.code, b.code);
+            });
+            return groups;
+        }
     }
     // Settings use UniqueId, not transient display names. Null means unconfirmed.
     [DataContract] public class ExportSettings
     {
         [DataMember] public string model_guid, level_id, phase_id;
         [DataMember] public string clear_width_parameter = "Egress_ClearWidth";
+        // 擷取視窗上次選的專案設定，下次同一模型同一層預先帶入
+        [DataMember(EmitDefaultValue = false)] public string use_group;
+        [DataMember(EmitDefaultValue = false)] public int? floor_number;
+        [DataMember(EmitDefaultValue = false)] public bool? fire_resistant;
         [DataMember] public List<RoomSetting> rooms = new List<RoomSetting>();
         [DataMember] public List<DoorSetting> doors = new List<DoorSetting>();
         [DataMember] public List<StairSetting> stairs = new List<StairSetting>();

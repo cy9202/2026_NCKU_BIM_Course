@@ -1,7 +1,9 @@
 param([ValidateSet('2027','2024')][string]$RevitVersion = '2027')
 $ErrorActionPreference = 'Stop'
 $framework = if ($RevitVersion -eq '2027') { 'net10.0-windows' } else { 'net48' }
-$source = Join-Path $PSScriptRoot "bin\$RevitVersion\Release\$framework\Group3.EgressExporter.dll"
+# A package has the DLL next to this script; a source checkout has it under bin.
+$source = Join-Path $PSScriptRoot 'Group3.EgressExporter.dll'
+if (!(Test-Path -LiteralPath $source)) { $source = Join-Path $PSScriptRoot "bin\$RevitVersion\Release\$framework\Group3.EgressExporter.dll" }
 if (!(Test-Path -LiteralPath $source)) { throw "Build first: $source" }
 $root = Join-Path $env:APPDATA "Autodesk\Revit\Addins\$RevitVersion"
 $packageRoot = Join-Path $root 'Group3.EgressExporter'
@@ -13,6 +15,8 @@ $assembly = Join-Path $target 'Group3.EgressExporter.dll'
 if (!(Test-Path -LiteralPath $assembly)) {
     Copy-Item -LiteralPath $source -Destination $assembly
 }
+# Files from a downloaded zip are marked as coming from the internet, and Revit will not load them.
+Unblock-File -LiteralPath $assembly
 if ((Get-FileHash -LiteralPath $assembly -Algorithm SHA256).Hash.ToLowerInvariant() -ne $hash) {
     throw 'Installed assembly hash mismatch; manifest was not changed.'
 }

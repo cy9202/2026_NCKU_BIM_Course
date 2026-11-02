@@ -4,6 +4,10 @@
 
 本次開發從 `main` 的 `e15b8e4` 開出 **`codex/revit-egress-export`**。後續修改提交此分支，經 PR 審閱後才能合併；不直接提交或推送 main。
 
+## 給其他電腦用
+
+`.\package.ps1 -RevitVersion 2024` 會產生 `dist\EgressExporter-Revit2024.zip`（內含 DLL、`install.bat`、`使用說明.txt`）。對方解壓縮後雙擊 `install.bat`、重開 Revit 即可，不需要 Node、.NET SDK、網路或 MCP。檢討網頁內嵌在 DLL 裡；每次擷取都在快照旁產生 `*-檢討網頁.html` 並自動開啟；使用類組、第幾層、防火構造在擷取視窗填寫（類組和樓層必填），隨網頁帶入後直接算出結果，並存在本機設定供下次帶入。建置機需要 Node（產生網頁）、.NET SDK 與對應版本的 Revit；2024 與 2027 的 DLL 不能互換，其他 Revit 版本目前不支援。
+
 ## 建置與安裝
 
 預設 Revit 2027、.NET 10 SDK。Revit 2024 設定保留為 .NET Framework 4.8，需另外安裝該版 Revit API 與 .NET Framework 4.8 Developer Pack。兩版 DLL 不可互換。
@@ -31,6 +35,10 @@ cd plugin
 4. 查看缺漏清單，可選取一或多列，按「在 Revit 選取所選元件」。沒有 Element ID 的列是整體範圍提醒。
 5. 複製範本為 `settings.local.json`，逐項確認分類、樓梯資格、終點與走廊中心線。再次擷取時載入此設定。
 6. 將已覆核的快照交給 B／C／D。來源或幾何尚有缺漏時，不應把檢討結果視為正式合規結論。
+
+## 選擇直通梯
+
+一般流程只需要這個按鈕：在樓板平面圖按「選擇直通梯」，點一下樓梯，外掛列出該位置重疊的樓梯、方向與偵測到的第一階，勾選要用的即可。設定存 `is_direct_stair`，不存座標，第一階在每次匯出時從梯段路徑重新偵測，所以模型改了會跟著更新；`endpoint_source` 為 `user_selected_direct:<偵測方式>`。偵測規則：從本層往上取最低梯段路徑起點；到本層為止取最高梯段路徑終點；穿過本層取本層高度的梯段，地上層優先往下、地下層優先往上。選過之後，本層取消勾選和沒選到的樓梯都移到 `unresolved_stairs`（`is_direct_stair: false`）。「手動指定樓梯終點」只用於防火門終點或偵測不到的情況。
 
 ## 在平面圖設定門與樓梯位置
 
@@ -121,7 +129,7 @@ cd plugin
 - `unresolved_doors[]`：已讀到但尚未確認位置的門；`position` 為 null，`position_candidate` 可供 D 顯示待確認標記，不能放入計算路網。`position_source`、`position_confirmed` 區別自動插入點、候選與人工確認。
 - `footprint_loops`：每個實際梯段／平台投影的獨立輪廓，D 應逐圈畫。多圈時舊 `footprint` 留空，避免把不相連的邊界串成錯誤樓梯。這些是整座樓梯投影，尚未套用 Revit 平面視圖的剖切／隱線規則。
 - `run_paths`：各梯段路徑，僅作幾何參考；尚未輸出踏階線。
-- `boundary_loops`：原始房間所有邊界圈。孔洞／多區域在現有引擎無法安全表示，所以 `boundary=[]`、`boundary_closed=false`，阻止錯誤穿越。
+- `boundary_loops`：原始房間所有邊界圈。內圈（柱子、孔洞）寫進 `obstacles` 由引擎繞開；不相連的多區域無法安全表示，所以 `boundary=[]`、`boundary_closed=false`，阻止錯誤穿越。
 - `warnings[].severity`：error 代表缺資料或未涵蓋範圍，warning 代表待確認／近似。既有 B/C **不會自動以所有 warnings 阻止判定**，使用前需覆核清單。
 - `project.model_version` 與 `has_unsaved_changes`：記錄匯出時模型版本；設定與快照仍應一起保存。
 
@@ -158,6 +166,8 @@ node check.js
 2026-10-30：同步 PR #4 的 C 規則後，以真實快照產生隔離測試頁並實測卡片、缺漏清單及建立新批次。三間房正確保留模型資料不足，未出現瀏覽器錯誤。前端的快照匯入、樓層文字、模型取景、空值設定及樓梯分件呈現仍待整合，見 [A、C 與前端整合紀錄](validation/2026-10-30-integration.md)。
 
 同日定位功能實測：新版已安裝並重新啟動 Revit 2027.3。在 NCKU 模型副本的 Level 3／New Construction，成功點選並重新匯出一扇門及一座樓梯的第一階測試終點；另外三扇門保留待定位。Esc 取消後設定檔雜湊不變，兩次匯出的 `has_unsaved_changes` 均為 false。核心測試 23 項、實際快照核對 9 組及專案檢查通過。樓梯直通資格維持 null，完整距離計算仍待補資料。實測中 `model_version` 的 GUID 有變，不能單憑版本 GUID 差異判斷幾何是否變動，見 [定位與樓梯終點實測紀錄](validation/2026-10-30-points.md)。
+
+2026-11-02：缺漏清單改成同一種問題一列，附件數與「要處理／提醒」等級，選一列可在 Revit 選取該類所有元件。以下情況不再逐筆提醒：族群插入點落在主體牆上的門（`DOOR_INSERTION_POINT` 只在對不上時出現，門口偏差最多約半個門寬）、外牆上只連一間房的室外門、其他樓層留下的未放置房間、`STAIR_COMPOSITE_FOOTPRINT`。`DOOR_NO_CLEAR_WIDTH` 合併成一筆，元件列在 `element_ids`（新增欄位，只有合併的筆才有，此時 `element_id` 為 null）。同一樓梯間的上、下元件在平面上外框重疊，「設定樓梯終點」視窗會列出本層所有重疊的樓梯與方向，由使用者選擇；上、下元件都列入計算候選，各自設定終點與資格，外掛不判斷方向；點的位置離該樓梯梯段路徑的第一階超過 0.5 m 時，確認視窗會提醒，選單也會標「位置待確認」並預設停在那座（操作提醒，非法規值）。房間的內圈（柱子、孔洞）改成寫進 `obstacles`（`category: room_inner_boundary`，`element_id` 是房間），`boundary` 取面積最大的外框，提醒代碼 `ROOM_INNER_LOOP`；不相連的區域仍回報 `ROOM_MULTIPLE_LOOPS` 並留空 `boundary`。此功能只有核心測試與引擎模擬，尚未用實際有獨立柱的 Revit 模型驗收。
 
 ## 程式位置
 

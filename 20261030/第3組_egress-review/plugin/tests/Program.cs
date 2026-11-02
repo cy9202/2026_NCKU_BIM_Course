@@ -79,6 +79,31 @@ static class Program
             copy = JsonFile.Read<Snapshot>(file);
             Check(copy.doors.Count == 0 && copy.unresolved_doors.Count == 1 && copy.unresolved_doors[0].position == null,
                 "candidate doors remain outside routing doors and preserve their suggested coordinate");
+            var page = ReportBuilder.Inject("a /*G3_IMPORT*/null b /*G3_SETTINGS*/null", "\uFEFF{\"name\":\"</script>\"}", "{}");
+            Check(page == "a {\"name\":\"\\u003c/script>\"} b {}", "the snapshot and settings go into the page without a BOM and cannot end the script early");
+            Reject(() => ReportBuilder.Inject("no marker", "{}", "{}"), "a page template without the marker is rejected");
+            Reject(() => ReportBuilder.Inject("/*G3_IMPORT*/null /*G3_IMPORT*/null /*G3_SETTINGS*/null", "{}", "{}"), "a page template with two markers is rejected");
+            Check(ReportBuilder.SettingsJson("H-2", 4, true).Contains("\"use_group\":\"H-2\"") && ReportBuilder.SettingsJson("H-2", 4, true).Contains("\"floor_number\":4,\"below_ground\":false,\"fire_resistant\":true"), "review settings are written for the page");
+            Check(ReportBuilder.SettingsJson("H-2", -1, null).Contains("\"below_ground\":true,\"fire_resistant\":null"), "a negative floor is below ground and an unconfirmed fire rating stays null");
+            Reject(() => ReportBuilder.SettingsJson("Z-9", 4, true), "an unknown use group is rejected");
+            var column = new List<double[]> { P(4,1), P(5,1), P(5,2), P(4,2) };
+            var outerRing = Geometry.OuterLoop(new List<List<double[]>> { column, ring }, out var innerLoops);
+            Check(ReferenceEquals(outerRing, ring) && innerLoops.Count == 1 && ReferenceEquals(innerLoops[0], column),
+                "the largest loop is the room outline and a column inside it becomes an inner loop");
+            Check(Geometry.OuterLoop(new List<List<double[]>> { ring }, out innerLoops) == ring && innerLoops.Count == 0, "a room with one loop has no inner loops");
+            var detached = new List<double[]> { P(20,0), P(21,0), P(21,1), P(20,1) };
+            Check(Geometry.OuterLoop(new List<List<double[]>> { ring, detached }, out innerLoops) == null, "a detached region is not treated as an inner loop");
+            var grouped = WarningSummary.Group(new[] {
+                new WarningData { code = "DOOR_NO_CLEAR_WIDTH", element_ids = new List<string> { "1", "2", "3" }, message = "m" },
+                new WarningData { code = "ROOM_NOT_ENCLOSED", element_id = "9", severity = "error", message = "m" },
+                new WarningData { code = "ROOM_NOT_ENCLOSED", element_id = "8", severity = "error", message = "m" },
+                new WarningData { code = "OBSTACLE_SCOPE", message = "m" } });
+            Check(grouped.Count == 3 && grouped[0].code == "ROOM_NOT_ENCLOSED" && grouped[0].count == 2 && grouped[0].element_ids.Count == 2,
+                "same-code warnings collapse to one row with errors listed first");
+            Check(grouped.Single(g => g.code == "DOOR_NO_CLEAR_WIDTH").count == 3 && grouped.Single(g => g.code == "OBSTACLE_SCOPE").count == 1,
+                "a merged warning counts its elements and a project-wide warning counts once");
+            JsonFile.Write(file, new Snapshot { warnings = new List<WarningData> { new WarningData { code = "OBSTACLE_SCOPE", message = "m" } } });
+            Check(!File.ReadAllText(file).Contains("element_ids"), "single warnings do not add an element_ids field to the snapshot");
         }
         finally { if (File.Exists(file)) File.Delete(file); }
     }

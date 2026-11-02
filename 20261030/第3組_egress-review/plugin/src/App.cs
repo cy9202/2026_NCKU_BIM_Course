@@ -22,11 +22,13 @@ namespace Group3.EgressExporter
             var button = (PushButton)panel.AddItem(new PushButtonData("Group3Export", "擷取模型\n與缺漏清單",
                 Assembly.GetExecutingAssembly().Location, typeof(ExportCommand).FullName));
             button.ToolTip = "唯讀匯出房間、門、樓梯、走廊與 warnings；不執行法規判定。";
+            panel.AddItem(new PushButtonData("Group3SelectStairs", "選擇\n直通梯",
+                Assembly.GetExecutingAssembly().Location, typeof(SelectDirectStairsCommand).FullName));
             panel.AddItem(new PushButtonData("Group3Ids", "查看所選\n元件識別碼",
                 Assembly.GetExecutingAssembly().Location, typeof(InspectSelectionCommand).FullName));
             panel.AddItem(new PushButtonData("Group3DoorPoint", "設定門\n位置",
                 Assembly.GetExecutingAssembly().Location, typeof(SetDoorPositionCommand).FullName));
-            panel.AddItem(new PushButtonData("Group3StairPoint", "設定樓梯\n終點",
+            panel.AddItem(new PushButtonData("Group3StairPoint", "手動指定\n樓梯終點",
                 Assembly.GetExecutingAssembly().Location, typeof(SetStairEndpointCommand).FullName));
             return Result.Succeeded;
         }
@@ -66,6 +68,11 @@ namespace Group3.EgressExporter
                 {
                     if (form.ShowDialog(new WindowHandle(command.Application.MainWindowHandle)) != DialogResult.OK) return Result.Cancelled;
                     var settings = string.IsNullOrWhiteSpace(form.SettingsPath) ? LocalSettings.Load(doc, form.SelectedLevel, form.SelectedPhase) : JsonFile.Read<ExportSettings>(form.SettingsPath);
+                    if (string.IsNullOrWhiteSpace(form.SettingsPath))
+                    {
+                        settings.use_group = form.UseGroup; settings.floor_number = form.FloorNumber; settings.fire_resistant = form.FireResistant;
+                        LocalSettings.Save(doc, form.SelectedLevel, form.SelectedPhase, settings);
+                    }
                     var extractor = new Extractor(doc, form.SelectedLevel, form.SelectedPhase, settings);
                     var snapshot = extractor.Run();
                     var settingsCopy = form.OutputPath + ".settings.json";
@@ -77,7 +84,9 @@ namespace Group3.EgressExporter
                     var templatePath = Path.Combine(Path.GetDirectoryName(form.OutputPath),
                         "settings-template-" + snapshot.project.level_id + "-" + snapshot.project.phase_id + ".json");
                     if (!File.Exists(templatePath)) JsonFile.Write(templatePath, extractor.Template());
-                    using (var report = new ReportForm(snapshot, form.OutputPath))
+                    var reportPath = WriteReport(form.OutputPath, ReportBuilder.SettingsJson(form.UseGroup, form.FloorNumber, form.FireResistant));
+                    OpenReport(reportPath);
+                    using (var report = new ReportForm(snapshot, form.OutputPath, reportPath))
                     {
                         report.ShowDialog(new WindowHandle(command.Application.MainWindowHandle));
                         var ids = report.SelectedIds.Select(s => long.TryParse(s, out var n) ? new ElementId(n) : ElementId.InvalidElementId)
@@ -88,6 +97,21 @@ namespace Group3.EgressExporter
                 return Result.Succeeded;
             }
             catch (Exception ex) { message = ex.Message; TaskDialog.Show("擷取失敗", ex.Message); return Result.Failed; }
+        }
+        // 檢討網頁放在 DLL 裡，每次擷取都在快照旁邊產生一份，其他電腦不用另外準備檔案
+        static string WriteReport(string snapshotPath, string settingsJson)
+        {
+            string template;
+            using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("report.html"))
+            using (var reader = new StreamReader(stream, System.Text.Encoding.UTF8)) template = reader.ReadToEnd();
+            var path = Path.Combine(Path.GetDirectoryName(snapshotPath), Path.GetFileNameWithoutExtension(snapshotPath) + "-檢討網頁.html");
+            File.WriteAllText(path, ReportBuilder.Inject(template, File.ReadAllText(snapshotPath, System.Text.Encoding.UTF8), settingsJson), new System.Text.UTF8Encoding(false));
+            return path;
+        }
+        internal static void OpenReport(string path)
+        {
+            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true }); }
+            catch (Exception ex) { TaskDialog.Show("無法自動開啟檢討網頁", "請用瀏覽器開啟：\n" + path + "\n\n" + ex.Message); }
         }
     }
     internal sealed class WindowHandle : IWin32Window
@@ -104,11 +128,27 @@ namespace Group3.EgressExporter
         public Phase SelectedPhase => (Phase)phases.SelectedItem;
         public string SettingsPath => settings.Text.Trim();
         public string OutputPath { get; private set; }
+        readonly ComboBox useGroup = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
+        readonly TextBox floor = new TextBox { Dock = DockStyle.Fill };
+        readonly ComboBox fire = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
+        public string UseGroup => useGroup.SelectedIndex > 0 ? (string)useGroup.SelectedItem : null;
+        public int FloorNumber => int.Parse(floor.Text.Trim(), System.Globalization.CultureInfo.InvariantCulture);
+        public bool? FireResistant => fire.SelectedIndex == 1 ? true : fire.SelectedIndex == 2 ? false : (bool?)null;
+        // 這一層之前選過就帶入；沒選過時類組和防火構造沿用畫面上的值（同棟通常一樣），樓層一定要重填
+        void LoadReviewSettings(Document doc)
+        {
+            if (SelectedLevel == null || SelectedPhase == null) return;
+            ExportSettings saved = null;
+            try { saved = LocalSettings.Load(doc, SelectedLevel, SelectedPhase); } catch (ArgumentException) { }
+            floor.Text = saved?.floor_number?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "";
+            if (saved?.use_group != null && useGroup.Items.Contains(saved.use_group)) useGroup.SelectedItem = saved.use_group;
+            if (saved?.fire_resistant != null) fire.SelectedIndex = saved.fire_resistant.Value ? 1 : 2;
+        }
         public ExportForm(Document doc)
         {
-            Text = "第三組｜Revit 模型資料擷取"; Width = 720; Height = 400;
+            Text = "第三組｜Revit 模型資料擷取"; Width = 720; Height = 520;
             StartPosition = FormStartPosition.CenterParent; AutoScaleMode = AutoScaleMode.Dpi;
-            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(18), ColumnCount = 3, RowCount = 6 };
+            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(18), ColumnCount = 3, RowCount = 8 };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
@@ -128,15 +168,26 @@ namespace Group3.EgressExporter
             if (phases.Items.Count > 0) phases.SelectedIndex = phases.Items.Count - 1;
             var activePhase = doc.ActiveView.get_Parameter(BuiltInParameter.VIEW_PHASE)?.AsElementId();
             foreach (Phase phase in phases.Items) if (phase.Id == activePhase) phases.SelectedItem = phase;
-            layout.Controls.Add(new Label { Text = "設定（選填）", AutoSize = true }, 0, 3); layout.Controls.Add(settings, 1, 3);
+            useGroup.Items.Add("— 請選擇 —"); useGroup.Items.AddRange(ReportBuilder.UseGroups); useGroup.SelectedIndex = 0;
+            fire.Items.AddRange(new object[] { "未確認", "是", "否" }); fire.SelectedIndex = 0;
+            layout.Controls.Add(new Label { Text = "使用類組", AutoSize = true }, 0, 3); layout.Controls.Add(useGroup, 1, 3); layout.SetColumnSpan(useGroup, 2);
+            layout.Controls.Add(new Label { Text = "第幾層", AutoSize = true }, 0, 4); layout.Controls.Add(floor, 1, 4); layout.SetColumnSpan(floor, 2);
+            layout.Controls.Add(new Label { Text = "防火構造或\n不燃材料", AutoSize = true }, 0, 5); layout.Controls.Add(fire, 1, 5); layout.SetColumnSpan(fire, 2);
+            LoadReviewSettings(doc);
+            levels.SelectedIndexChanged += (s, e) => LoadReviewSettings(doc);
+            phases.SelectedIndexChanged += (s, e) => LoadReviewSettings(doc);
+            layout.Controls.Add(new Label { Text = "設定（選填）", AutoSize = true }, 0, 6); layout.Controls.Add(settings, 1, 6);
             var browse = new Button { Text = "選擇 JSON", Dock = DockStyle.Fill };
             browse.Click += (s, e) => { using (var dialog = new OpenFileDialog { Filter = "JSON|*.json" }) if (dialog.ShowDialog(this) == DialogResult.OK) settings.Text = dialog.FileName; };
-            layout.Controls.Add(browse, 2, 3);
+            layout.Controls.Add(browse, 2, 6);
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, AutoSize = true };
             var cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel };
             var export = new Button { Text = "匯出快照…", AutoSize = true };
             export.Click += (s, e) => {
                 if (SelectedLevel == null || SelectedPhase == null) { MessageBox.Show(this, "請選擇樓層與階段。"); return; }
+                if (UseGroup == null) { MessageBox.Show(this, "請選擇使用類組。外掛不從房間名稱推測。"); return; }
+                if (!int.TryParse(floor.Text.Trim(), System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture, out var floorNumber) || floorNumber == 0 || floorNumber < -5 || floorNumber > 120)
+                { MessageBox.Show(this, "請填這是第幾層：地上填 1、2、3…，地下填 -1、-2…。"); return; }
                 if (SettingsPath.Length > 0 && !File.Exists(SettingsPath)) { MessageBox.Show(this, "找不到設定檔。"); return; }
                 using (var dialog = new SaveFileDialog { Filter = "模型快照 JSON|*.json", FileName = "real-模型快照.json", OverwritePrompt = true })
                 {
@@ -146,32 +197,42 @@ namespace Group3.EgressExporter
                     OutputPath = dialog.FileName; DialogResult = DialogResult.OK;
                 }
             };
-            buttons.Controls.Add(cancel); buttons.Controls.Add(export); layout.Controls.Add(buttons, 0, 5); layout.SetColumnSpan(buttons, 3);
+            buttons.Controls.Add(cancel); buttons.Controls.Add(export); layout.Controls.Add(buttons, 0, 7); layout.SetColumnSpan(buttons, 3);
             AcceptButton = export; CancelButton = cancel;
         }
     }
     internal sealed class ReportForm : Form
     {
         public List<string> SelectedIds = new List<string>();
-        public ReportForm(Snapshot snapshot, string path)
+        public ReportForm(Snapshot snapshot, string path, string reportPath)
         {
             Text = "擷取完成｜缺漏清單"; Width = 1000; Height = 620;
             StartPosition = FormStartPosition.CenterParent; AutoScaleMode = AutoScaleMode.Dpi;
             var layout = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, Padding = new Padding(12) };
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 90)); layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 45));
             Controls.Add(layout);
-            layout.Controls.Add(new Label { Dock = DockStyle.Fill, Text = $"{snapshot.project.level.name}／{snapshot.project.phase}　房間 {snapshot.rooms.Count}　門 {snapshot.doors.Count}（另有待定位 {snapshot.unresolved_doors.Count}）\n樓梯 {snapshot.stairs.Count + snapshot.unresolved_stairs.Count}（終點未定 {snapshot.unresolved_stairs.Count}）　走廊 {snapshot.corridors.Count}　缺漏／提醒 {snapshot.warnings.Count} 項（不代表法規判定）\n{path}" }, 0, 0);
-            var grid = new DataGridView { Dock = DockStyle.Fill, ReadOnly = true, AllowUserToAddRows = false, AllowUserToDeleteRows = false,
+            var groups = WarningSummary.Group(snapshot.warnings);
+            int mustFix = groups.Count(g => g.severity == "error");
+            layout.Controls.Add(new Label { Dock = DockStyle.Fill, Text = $"{snapshot.project.level.name}／{snapshot.project.phase}　房間 {snapshot.rooms.Count}　門 {snapshot.doors.Count}（另有待定位 {snapshot.unresolved_doors.Count}）\n樓梯 {snapshot.stairs.Count + snapshot.unresolved_stairs.Count}（未列入計算 {snapshot.unresolved_stairs.Count}）　走廊 {snapshot.corridors.Count}　要處理 {mustFix} 類、提醒 {groups.Count - mustFix} 類（不代表法規判定）\n{path}" }, 0, 0);
+            var grid = new DataGridView { Dock = DockStyle.Fill, ReadOnly = true, AllowUserToAddRows = false, AllowUserToDeleteRows = false, RowHeadersVisible = false,
                 AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, SelectionMode = DataGridViewSelectionMode.FullRowSelect };
-            grid.Columns.Add("id", "Element ID"); grid.Columns.Add("code", "問題代碼"); grid.Columns.Add("message", "說明");
-            grid.Columns[0].FillWeight = 15; grid.Columns[1].FillWeight = 30; grid.Columns[2].FillWeight = 100;
-            foreach (var w in snapshot.warnings) grid.Rows.Add(w.element_id, w.code, w.message);
+            grid.Columns.Add("level", "等級"); grid.Columns.Add("code", "問題代碼"); grid.Columns.Add("count", "件數"); grid.Columns.Add("message", "說明");
+            grid.Columns[0].FillWeight = 12; grid.Columns[1].FillWeight = 32; grid.Columns[2].FillWeight = 8; grid.Columns[3].FillWeight = 100;
+            grid.Columns[3].DefaultCellStyle.WrapMode = DataGridViewTriState.True;
+            grid.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells;
+            foreach (var g in groups)
+            {
+                var row = grid.Rows[grid.Rows.Add(g.severity == "error" ? "要處理" : "提醒", g.code, g.count, g.message)];
+                row.Tag = g.element_ids;
+            }
             layout.Controls.Add(grid, 0, 1);
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft };
             var close = new Button { Text = "關閉", DialogResult = DialogResult.OK };
             var select = new Button { Text = "在 Revit 選取所選元件", AutoSize = true };
-            select.Click += (s, e) => { SelectedIds = grid.SelectedRows.Cast<DataGridViewRow>().Select(r => r.Cells[0].Value as string).Where(x => x != null).Distinct().ToList(); Close(); };
-            buttons.Controls.Add(close); buttons.Controls.Add(select); layout.Controls.Add(buttons, 0, 2);
+            select.Click += (s, e) => { SelectedIds = grid.SelectedRows.Cast<DataGridViewRow>().SelectMany(r => (List<string>)r.Tag).Distinct().ToList(); Close(); };
+            var open = new Button { Text = "開啟檢討網頁", AutoSize = true };
+            open.Click += (s, e) => ExportCommand.OpenReport(reportPath);
+            buttons.Controls.Add(close); buttons.Controls.Add(select); buttons.Controls.Add(open); layout.Controls.Add(buttons, 0, 2);
         }
     }
 }

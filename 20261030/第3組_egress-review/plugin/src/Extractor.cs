@@ -6,6 +6,40 @@ using Autodesk.Revit.DB.Architecture;
 
 namespace Group3.EgressExporter
 {
+    // 從 Revit 梯段路徑找這座樓梯在本層的第一階，所有模型都用同一套規則：
+    // 從本層往上 → 最低梯段路徑的起點；到本層為止 → 最高梯段路徑的終點；
+    // 穿過本層 → 找本層高度的梯段，地上層優先往下、地下層優先往上。找不到回傳 null，不用樓梯中心代替。
+    internal static class StairEndpoint
+    {
+        internal static XYZ Detect(Document doc, Stairs stair, Level level, out string source, out double diff)
+        {
+            source = null; diff = 0;
+            // 樓梯常有幾公分的頂部／基準偏移（例如面材厚度），所以放到 0.2 m；幾何設定，非法規值
+            double tol = UnitUtils.ConvertToInternalUnits(0.2, UnitTypeId.Meters), e = level.ProjectElevation;
+            var runs = stair.GetStairsRuns().Select(id => doc.GetElement(id)).OfType<StairsRun>().ToList();
+            if (!runs.Any()) return null;
+            double dBase = stair.BaseElevation - e, dTop = stair.TopElevation - e;
+            if (Math.Abs(dBase) <= tol && Math.Abs(dBase) <= Math.Abs(dTop))
+            {
+                diff = dBase; source = "lowest_run_path_start";
+                return Start(runs.OrderBy(x => x.BaseElevation).First());
+            }
+            if (Math.Abs(dTop) <= tol)
+            {
+                diff = dTop; source = "highest_run_path_end";
+                return End(runs.OrderByDescending(x => x.TopElevation).First());
+            }
+            // 梯段高程是相對樓梯底部（Revit API 文件）
+            var down = runs.FirstOrDefault(r => Math.Abs(stair.BaseElevation + r.TopElevation - e) <= tol);
+            var up = runs.FirstOrDefault(r => Math.Abs(stair.BaseElevation + r.BaseElevation - e) <= tol);
+            bool useDown = e < 0 ? up == null : down != null;
+            if (useDown && down != null) { source = "level_run_path_end"; diff = stair.BaseElevation + down.TopElevation - e; return End(down); }
+            if (up != null) { source = "level_run_path_start"; diff = stair.BaseElevation + up.BaseElevation - e; return Start(up); }
+            return null;
+        }
+        static XYZ Start(StairsRun run) => run.GetStairsPath().FirstOrDefault()?.GetEndPoint(0);
+        static XYZ End(StairsRun run) => run.GetStairsPath().LastOrDefault()?.GetEndPoint(1);
+    }
     public sealed class Extractor
     {
         readonly Document doc;
@@ -13,6 +47,7 @@ namespace Group3.EgressExporter
         readonly Phase phase;
         readonly ExportSettings settings;
         readonly Snapshot result = new Snapshot();
+        readonly List<string> doorsWithoutWidth = new List<string>();
         public Extractor(Document doc, Level level, Phase phase, ExportSettings settings)
         { this.doc = doc; this.level = level; this.phase = phase; this.settings = settings; }
         static string Id(Element e) => e.Id.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -56,9 +91,13 @@ namespace Group3.EgressExporter
                 .Where(e => MainModel(e) && Exists(e))) Safe(door, () => ReadDoor(door));
             foreach (var stair in All<Stairs>().Where(e => MainModel(e) && Exists(e)))
                 Safe(stair, () => ReadStair(stair));
+            KeepOnlySelectedStairs();
             foreach (var stair in result.stairs.Where(s => s.entry_point == null).ToList()) {
                 result.stairs.Remove(stair); result.unresolved_stairs.Add(stair);
             }
+            if (doorsWithoutWidth.Any())
+                result.warnings.Add(new WarningData { code = "DOOR_NO_CLEAR_WIDTH", element_ids = doorsWithoutWidth,
+                    message = doorsWithoutWidth.Count + " 扇門缺少有效淨寬；不採用一般門寬代替。目前的距離計算不使用淨寬，檢討門寬時再填。" });
             foreach (var r in result.rooms.Where(r => r.door_ids.Count == 0))
                 Warn(doc.GetElement(r.unique_id), "ROOM_NO_DOOR", "沒有找到與此房間關聯的門。", "error");
             foreach (var multi in All<MultistoryStairs>())
@@ -72,8 +111,10 @@ namespace Group3.EgressExporter
                 Warn(link, "LINK_NOT_EXTRACTED", "本版只擷取主文件；連結模型未納入，請先確認房間、門、障礙物來源。", "error");
             if (All<DesignOption>().Any()) Warn(null, "DESIGN_OPTIONS_EXCLUDED", "只擷取主模型；設計選項中的元件未納入。", "error");
             if (!result.rooms.Any()) Warn(null, "NO_ROOMS", "所選樓層／階段找不到已放置房間。未放置房間沒有樓層，另列於清單。", "error");
+            // 未放置的房間仍記著原本的樓層；別層留下的不影響這次檢討，不列入
             foreach (var r in All<Room>().Where(r => r.Location == null && MainModel(r) &&
-                r.get_Parameter(BuiltInParameter.ROOM_PHASE)?.AsElementId() == phase.Id))
+                r.get_Parameter(BuiltInParameter.ROOM_PHASE)?.AsElementId() == phase.Id &&
+                (r.LevelId == level.Id || r.LevelId == ElementId.InvalidElementId)))
                 Warn(r, "ROOM_NOT_PLACED", "房間未放置，無法歸屬所選樓層。", "error");
             // 有通行空間時，B 的引擎可以直接在房間裡排路線，不一定需要中心線
             if (!result.corridors.Any() && !result.rooms.Any(r => r.is_circulation == true)) Warn(null, "NO_CORRIDOR_CENTERLINE", "未設定走廊中心線；可在設定檔指定曲線，或先確認房間的 is_circulation。");
@@ -138,11 +179,18 @@ namespace Group3.EgressExporter
                         data.boundary_loops.Add(Points(curves, true));
                     }
             }
-            // Existing B engine cannot represent multiple boundary rings safely. Preserve originals, block routing.
-            if (data.boundary_loops.Count == 1 && data.boundary_loops[0].Count >= 3 && data.area_m2.HasValue)
-            { data.boundary = data.boundary_loops[0]; data.boundary_closed = true; }
+            // 內圈（房間內的柱子、孔洞）交給 B 引擎當障礙物繞開；不相連的多個區域仍留空，阻止錯誤路徑
+            var outer = Geometry.OuterLoop(data.boundary_loops, out var holes);
+            if (outer != null && outer.Count >= 3 && data.area_m2.HasValue)
+            {
+                data.boundary = outer; data.boundary_closed = true;
+                foreach (var hole in holes)
+                    result.obstacles.Add(new ObstacleData { element_id = data.element_id, unique_id = data.unique_id,
+                        category = "room_inner_boundary", geometry_source = "room_boundary_inner_loop", footprint = hole });
+                if (holes.Any()) Warn(r, "ROOM_INNER_LOOP", "房間內有 " + holes.Count + " 個內圈（柱子或孔洞），已當障礙物繞開；請確認它確實不能通行。");
+            }
             else if (data.boundary_loops.Count > 1)
-                Warn(r, "ROOM_MULTIPLE_LOOPS", "包含孔洞或多個區域。原始輪廓保存在 boundary_loops；目前引擎不支援，boundary 留空以阻止錯誤路徑。", "error");
+                Warn(r, "ROOM_MULTIPLE_LOOPS", "房間有不相連的區域。原始輪廓保存在 boundary_loops；boundary 留空以阻止錯誤路徑。", "error");
             else Warn(r, "ROOM_NOT_ENCLOSED", "房間未封閉、面積為零或沒有有效邊界。", "error");
             if (!data.is_habitable.HasValue) Warn(r, "ROOM_USE_UNCONFIRMED", "是否居室尚未確認；可在房間「部門」參數填 居室／通行／非居室。");
             if (!data.is_circulation.HasValue) Warn(r, "ROOM_CIRCULATION_UNCONFIRMED", "是否通行空間尚未確認；不會以房間名稱推測，可在「部門」參數填 通行。");
@@ -194,7 +242,9 @@ namespace Group3.EgressExporter
             else if (candidate != null && data.position_source == "family_location_point")
             {
                 data.position = XY(candidate);
-                Warn(door, "DOOR_INSERTION_POINT", "position 使用族群插入點；需確認它位在實際可通行門口。");
+                // 插入點落在主體牆上就是這扇門的門洞；只有對不上時才需要人看
+                if (!OnHostWall(door, candidate))
+                    Warn(door, "DOOR_INSERTION_POINT", "族群插入點不在主體牆上；需確認它位在實際可通行門口，或用「設定門位置」修正。");
             }
             if (data.position == null)
             {
@@ -205,8 +255,18 @@ namespace Group3.EgressExporter
             }
             result.doors.Add(data);
             foreach (var r in rooms) r.door_ids.Add(data.element_id);
-            if (!data.clear_width_m.HasValue) Warn(door, "DOOR_NO_CLEAR_WIDTH", "缺少有效淨寬；不採用一般門寬或族群名稱代替。");
-            if (rooms.Count < 2) Warn(door, "DOOR_ROOM_ASSOCIATION_INCOMPLETE", "只找到 " + rooms.Count + " 個本樓層相鄰房間；可能為室外門、未建模通道或房間計算點問題。");
+            if (!data.clear_width_m.HasValue) doorsWithoutWidth.Add(data.element_id);
+            // 開在外牆、一側有房間的門是室外門，本來就只連到一間房
+            bool exteriorDoor = rooms.Count == 1 && door.Host is Wall hostWall && hostWall.WallType.Function == WallFunction.Exterior;
+            if (rooms.Count < 2 && !exteriorDoor) Warn(door, "DOOR_ROOM_ASSOCIATION_INCOMPLETE", "只找到 " + rooms.Count + " 個本樓層相鄰房間；可能為室外門、未建模通道或房間計算點問題。");
+        }
+        // 點（只看平面）離主體牆中心線的距離，不超過半個牆厚（再加 1 mm 數值容差）
+        static bool OnHostWall(FamilyInstance door, XYZ point)
+        {
+            if (!(door.Host is Wall wall) || !(wall.Location is LocationCurve location)) return false;
+            var curve = location.Curve;
+            var hit = curve.Project(new XYZ(point.X, point.Y, curve.GetEndPoint(0).Z));
+            return hit != null && hit.Distance <= wall.Width / 2 + UnitUtils.ConvertToInternalUnits(0.001, UnitTypeId.Meters);
         }
         void ReadStair(Stairs stair)
         {
@@ -228,7 +288,6 @@ namespace Group3.EgressExporter
                 Safe(landing, () => data.footprint_loops.Add(Points(landing.GetFootprintBoundary(), true)));
             }
             if (data.footprint_loops.Count == 1) data.footprint = data.footprint_loops[0];
-            else Warn(stair, "STAIR_COMPOSITE_FOOTPRINT", "實際梯段／平台分別保存在 footprint_loops；前端需逐圈繪製。未用包圍矩形或凸包替代樓梯。");
             var mapping = settings.stairs.SingleOrDefault(x => x.unique_id == stair.UniqueId);
             data.is_direct_stair = mapping?.is_direct_stair;
             if (mapping?.picked_point != null)
@@ -272,35 +331,32 @@ namespace Group3.EgressExporter
             if (data.entry_point == null) AutoEndpoint(stair, data);
             if (data.entry_point == null) {
                 data.is_direct_stair = data.is_direct_stair == false ? (bool?)false : null;
-                Warn(stair, "STAIR_ENDPOINT_UNCONFIRMED", "尚未指定並確認本樓層第一階／防火門終點，梯段路徑也推不出來。保留 null，不會拿樓梯中心點代替。", "error");
+                Warn(stair, "STAIR_ENDPOINT_UNCONFIRMED", "偵測不到本層的第一階；請用「手動指定樓梯終點」。不會拿樓梯中心點代替。", "error");
             }
-            if (!data.is_direct_stair.HasValue) Warn(stair, "STAIR_DIRECT_UNCONFIRMED", "直通樓梯資格尚未確認；仍列入計算候選，但結果會標需人工確認。");
+            if (!data.is_direct_stair.HasValue) Warn(stair, "STAIR_DIRECT_UNCONFIRMED", "還沒選定是否使用這座樓梯；仍列入計算候選，但結果會標需人工確認。請按「選擇直通梯」。");
         }
-        // 設定檔沒指定終點時，從 Revit 梯段路徑推本樓層的第一階：
-        // 樓梯從本層往上 → 最低梯段路徑的起點；樓梯到本層為止 → 最高梯段路徑的終點。穿過本層的樓梯推不出來，保留 null。
+        // 沒有手動指定終點時，由外掛偵測本層的第一階。使用者用「選擇直通梯」選過的就直接採用，不再提醒。
         void AutoEndpoint(Stairs stair, StairData data)
         {
-            // 判斷樓梯底／頂是否在本層的容差（公尺），幾何設定，非法規值。
-            // 樓梯常有幾公分的頂部／基準偏移（例如面材厚度），所以放到 0.2 m，實際差多少寫進 warnings
-            const double tol = 0.2;
-            var runs = stair.GetStairsRuns().Select(id => doc.GetElement(id)).OfType<StairsRun>().ToList();
-            if (!runs.Any()) return;
-            XYZ point = null; string source = null;
-            double dBase = M(stair.BaseElevation - level.ProjectElevation), dTop = M(stair.TopElevation - level.ProjectElevation), diff = 0;
-            if (Math.Abs(dBase) <= tol && Math.Abs(dBase) <= Math.Abs(dTop))
-            {
-                var path = runs.OrderBy(x => x.BaseElevation).First().GetStairsPath().ToList();
-                if (path.Any()) { point = path.First().GetEndPoint(0); source = "auto:lowest_run_path_start"; diff = dBase; }
-            }
-            else if (Math.Abs(dTop) <= tol)
-            {
-                var path = runs.OrderByDescending(x => x.TopElevation).First().GetStairsPath().ToList();
-                if (path.Any()) { point = path.Last().GetEndPoint(1); source = "auto:highest_run_path_end"; diff = dTop; }
-            }
+            var point = StairEndpoint.Detect(doc, stair, level, out var source, out var diff);
             if (point == null) return;
-            data.entry_point = XY(point); data.endpoint_type = "first_step"; data.endpoint_source = source;
-            Warn(stair, "STAIR_ENDPOINT_AUTO", "第一階位置由梯段路徑自動推得（" + source + "，樓梯端點和本層高差 "
-                + diff.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture) + " m），需確認；結果會標需人工確認。");
+            data.entry_point = XY(point); data.endpoint_type = "first_step";
+            if (data.is_direct_stair == true) { data.endpoint_source = "user_selected_direct:" + source; return; }
+            data.endpoint_source = "auto:" + source;
+            Warn(stair, "STAIR_ENDPOINT_AUTO", "第一階位置已偵測（" + source + "，和本層高差 "
+                + M(diff).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture) + " m），但還沒選定要用這座；請按「選擇直通梯」。");
+        }
+        // 使用者選過直通梯後，這一層只算選定的樓梯：取消勾選的和沒選到的都不列入（保留在 unresolved_stairs 供畫面顯示）
+        void KeepOnlySelectedStairs()
+        {
+            bool anySelected = settings.stairs.Any(s => s != null && s.is_direct_stair == true);
+            foreach (var stair in result.stairs)
+            {
+                var mapping = settings.stairs.SingleOrDefault(x => x.unique_id == stair.unique_id);
+                if (mapping?.is_direct_stair != false && !(anySelected && mapping == null)) continue;
+                stair.entry_point = null; stair.endpoint_type = null; stair.endpoint_source = null; stair.is_direct_stair = false;
+                result.warnings.RemoveAll(w => w.element_id == stair.element_id && w.code.StartsWith("STAIR_", StringComparison.Ordinal));
+            }
         }
         void ReadCorridor(CorridorSetting setting)
         {
