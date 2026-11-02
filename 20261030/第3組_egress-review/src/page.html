@@ -436,6 +436,8 @@ function renderPlan() {
     if (L.dims) h += `<g class="dim"><text x="${(r.x0 + r.x1) / 2 * S}" y="${r.y1 * S - 3}" text-anchor="middle">淨寬 ${f1(w)}</text></g>`;
   }
   // A 的外掛把梯段、平台分圈放在 footprint_loops，逐圈畫；終點未定的樓梯（unresolved_stairs）畫虛線
+  const stairLabels = [];
+  let stairText = "";
   const drawStair = (st, unresolved) => {
     const loops = (st.footprint_loops || []).filter((l) => Array.isArray(l) && l.length >= 3);
     if (!loops.length && st.footprint && st.footprint.length) {
@@ -447,7 +449,14 @@ function renderPlan() {
     const all = loops.length ? loops.flat() : st.footprint || [];
     if (!all.length) return;
     const r = bb(all);
-    h += `<text class="lbl" x="${(r.x0 + r.x1) / 2 * S}" y="${r.y0 * S - 8}" text-anchor="middle" style="fill:var(--ok)">${esc(String(st.name || "").slice(-2))}${unresolved ? "（終點未定）" : ""}</text>`;
+    // 重疊的樓梯（例如同一樓梯間的上下兩座）標籤往上錯開，不疊字；使用者沒選用的寫「未使用」
+    const lx = (r.x0 + r.x1) / 2 * S;
+    let ly = r.y0 * S - 8;
+    while (stairLabels.some(([x, y]) => Math.abs(x - lx) < 90 && Math.abs(y - ly) < 14)) ly -= 16;
+    stairLabels.push([lx, ly]);
+    const note = !unresolved ? "" : st.is_direct_stair === false ? "（未使用）" : "（終點未定）";
+    // 標籤最後才畫，才不會被後面畫的房間底色蓋住
+    stairText += `<text class="lbl" x="${lx}" y="${ly}" text-anchor="middle" style="fill:var(--ok)">樓梯 ${esc(st.element_id)}${note}</text>`;
     if (Array.isArray(st.entry_point)) h += `<circle class="entry" cx="${X(st.entry_point[0])}" cy="${Y(st.entry_point[1])}" r="4"/>`;
   };
   if (L.stairs) {
@@ -506,7 +515,7 @@ function renderPlan() {
   h += `<g class="dim"><line x1="0" x2="${sl}" y1="${by}" y2="${by}" style="stroke-width:2"/><line x1="0" x2="0" y1="${by - 4}" y2="${by + 4}"/><line x1="${sl}" x2="${sl}" y1="${by - 4}" y2="${by + 4}"/><text x="${sl + 6}" y="${by + 4}">${niceLen(F.w)} m</text></g>
     <g transform="translate(${W + 8},-10)"><path d="M0,-14 L6,6 L0,2 L-6,6 z" style="fill:var(--ink)"/><text x="0" y="20" text-anchor="middle" class="val" style="fill:var(--ink)">N</text></g>
     <g class="titleblock"><text x="${W}" y="${by + 4}" text-anchor="end">${esc(lvl(b))} ・ ${esc(b.inputs.model)} ・ ${esc(b.inputs.rule_pack)} ・ ${b.batch_id} ・ ${b.created_at.slice(0, 10)}</text></g>`;
-  $("plan").innerHTML = h;
+  $("plan").innerHTML = h + stairText;
   $("plan").querySelectorAll(".room").forEach((el) => {
     const go = () => { state.sel = el.dataset.id; render(); };
     el.addEventListener("click", go);
